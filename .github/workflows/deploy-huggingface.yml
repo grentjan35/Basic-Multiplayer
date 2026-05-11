@@ -11,7 +11,6 @@ jobs:
     env:
       HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      HF_USERNAME: ${{ secrets.HF_USERNAME }}
     
     steps:
       - name: Checkout repository
@@ -23,12 +22,11 @@ jobs:
       - name: Debug variables
         run: |
           echo "HF_SPACE_ID=${HF_SPACE_ID}"
-          echo "HF_USERNAME=${HF_USERNAME}"
           echo "HF_TOKEN length=${#HF_TOKEN}"
 
       - name: Login to Hugging Face
         run: |
-          echo $HF_TOKEN | docker login registry.huggingface.co --username $HF_USERNAME --password-stdin
+          echo $HF_TOKEN | docker login registry.huggingface.co --password-stdin
 
       - name: Build and push Docker image
         run: |
