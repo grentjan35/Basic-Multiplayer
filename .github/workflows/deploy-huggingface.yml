@@ -32,7 +32,20 @@ jobs:
         run: |
           echo $HF_TOKEN | hf auth login
 
-      - name: Build and push Docker image
+      - name: Clone Hugging Face Space
         run: |
-          docker build -t grentjan35/basic-multiplayer .
-          hf docker push ${HF_SPACE_ID}
+          git clone https://huggingface.co/spaces/${HF_SPACE_ID} huggingface-space
+
+      - name: Copy files to Space
+        run: |
+          cp -r . huggingface-space/
+          cd huggingface-space
+          git add .
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          git commit -m "Deploy from GitHub Actions"
+
+      - name: Push to Hugging Face Space
+        run: |
+          cd huggingface-space
+          echo $HF_TOKEN | git push https://huggingface.co/spaces/${HF_SPACE_ID} main
