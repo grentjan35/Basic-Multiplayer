@@ -46,6 +46,15 @@
             z-index: 10;
         }
 
+        #fpsCounter {
+            position: absolute;
+            top: 30px;
+            left: 10px;
+            font-size: 12px;
+            color: #555;
+            z-index: 10;
+        }
+
         #minimap {
             position: absolute;
             top: 10px;
@@ -62,6 +71,7 @@
     <div id="container">
         <canvas id="canvas"></canvas>
         <div id="playerCount">Players: 0</div>
+        <div id="fpsCounter">FPS: 0</div>
         <canvas id="minimap"></canvas>
     </div>
 
@@ -70,6 +80,7 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const playerCount = document.getElementById('playerCount');
+        const fpsCounter = document.getElementById('fpsCounter');
         const minimapCanvas = document.getElementById('minimap');
         const minimapCtx = minimapCanvas.getContext('2d');
         
@@ -81,7 +92,7 @@
         let worldHeight = 0;
         
         // Interpolation system
-        const INTERPOLATION_DELAY = 60; // ms
+        const INTERPOLATION_DELAY = 100; // ms (increased for cloud network latency)
         const playerStates = new Map(); // Store past states for interpolation
         
         // Input state - only for sending to server
@@ -203,8 +214,8 @@
                             timestamp: timestamp
                         });
                         
-                        // Keep only last 500ms of states
-                        while (states.length > 0 && timestamp - states[0].timestamp > 500) {
+                        // Keep only last 300ms of states (reduced for better memory management)
+                        while (states.length > 0 && timestamp - states[0].timestamp > 300) {
                             states.shift();
                         }
                     }
@@ -283,8 +294,26 @@
             sendInput();
         });
 
+        // Performance monitoring
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+        let fpsUpdateTime = 0;
+
         // Render function - CLIENT ONLY, no physics
         function render() {
+            const currentTime = performance.now();
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+            
+            // Update FPS counter every 500ms
+            frameCount++;
+            if (currentTime - fpsUpdateTime > 500) {
+                const fps = Math.round(frameCount * 1000 / (currentTime - fpsUpdateTime));
+                fpsCounter.textContent = `FPS: ${fps}`;
+                frameCount = 0;
+                fpsUpdateTime = currentTime;
+            }
+            
             // Clear canvas
             ctx.fillStyle = '#0d0d0d';
             ctx.fillRect(0, 0, canvas.width, canvas.height);

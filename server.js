@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Server configuration
-const TICK_RATE = 60; // Server updates per second
+const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
 const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
@@ -302,8 +302,14 @@ function checkPlayerCollisions(currentPlayer) {
     }
 }
 
+// Performance monitoring
+let lastStatsUpdate = Date.now();
+let totalUpdates = 0;
+
 // Main game loop - SERVER ONLY
 function gameLoop() {
+    const startTime = process.hrtime.bigint();
+    
     // Update all players
     for (const [id, { player }] of players) {
         applyPhysics(player);
@@ -311,26 +317,39 @@ function gameLoop() {
         checkPlayerCollisions(player);
     }
     
-    // Send state to all clients
-    const playerStates = [];
-    for (const [id, { player }] of players) {
-        playerStates.push({
-            id: id,
-            x: player.x,
-            y: player.y,
-            color: player.color
+    // Send state to all clients (only if there are players)
+    if (players.size > 0) {
+        const playerStates = [];
+        for (const [id, { player }] of players) {
+            playerStates.push({
+                id: id,
+                x: Math.round(player.x * 100) / 100, // Round to reduce precision
+                y: Math.round(player.y * 100) / 100, // Round to reduce precision
+                color: player.color
+            });
+        }
+        
+        const message = JSON.stringify({
+            type: 'state',
+            players: playerStates
         });
+        
+        for (const [id, { ws }] of players) {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(message);
+            }
+        }
     }
     
-    const message = JSON.stringify({
-        type: 'state',
-        players: playerStates
-    });
-    
-    for (const [id, { ws }] of players) {
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(message);
-        }
+    // Performance monitoring
+    totalUpdates++;
+    const now = Date.now();
+    if (now - lastStatsUpdate > 5000) { // Log every 5 seconds
+        const endTime = process.hrtime.bigint();
+        const avgTime = Number(endTime - startTime) / 1000000; // Convert to milliseconds
+        console.log(`Game loop: ${totalUpdates} updates, avg time: ${avgTime.toFixed(2)}ms, players: ${players.size}`);
+        totalUpdates = 0;
+        lastStatsUpdate = now;
     }
 }
 

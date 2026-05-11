@@ -106,6 +106,43 @@ jobs:
 **Problem**: Hugging Face CLI detects existing login
 **Solution**: This is a warning, not an error. Deployment can continue.
 
+### Error 7: `WebSocket connection to 'wss://localhost:7860/' failed`
+**Problem**: Client hardcoded to connect to localhost even on Hugging Face
+**Solution**: Use dynamic host detection:
+```javascript
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsHost = window.location.host;
+const wsUrl = `${wsProtocol}//${wsHost}`;
+```
+
+### Error 8: Game shows "Players: 0" and no map on Hugging Face
+**Problem**: WebSocket connection failing due to hostname mismatch
+**Symptoms**: 
+- Console shows `WebSocket connection to 'wss://localhost:7860/' failed`
+- Page loads but no game elements appear
+- Player count stays at 0
+**Solution**: Implement dynamic WebSocket connection that uses current domain
+
+### Error 9: `ERR_BLOCKED_BY_CLIENT` errors in console
+**Problem**: AWS WAF or ad blocker interference
+**Solution**: These errors are unrelated to your game and can be ignored. They come from browser extensions blocking AWS WAF telemetry.
+
+### Error 10: WebSocket connects but immediately disconnects
+**Problem**: Missing CORS headers or server configuration issues
+**Solution**: Add CORS headers to server:
+```javascript
+res.setHeader('Access-Control-Allow-Origin', '*');
+res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+```
+
+### Error 11: Connection works locally but fails on Hugging Face
+**Problem**: Protocol mismatch (HTTP vs HTTPS)
+**Solution**: Use protocol detection for WebSocket:
+```javascript
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+```
+
 ## Deployment Process
 
 1. **Local Development**:
@@ -145,6 +182,7 @@ jobs:
 
 ## Troubleshooting Checklist
 
+### General Deployment
 - [ ] GitHub secrets are correctly set
 - [ ] Dockerfile exists and exposes port 7860
 - [ ] Server listens on port 7860
@@ -152,6 +190,14 @@ jobs:
 - [ ] All required files are committed to repository
 - [ ] Hugging Face token has write permissions
 - [ ] Space ID format is correct (username/space-name)
+
+### WebSocket Connection Issues
+- [ ] Client uses dynamic host detection (`window.location.host`)
+- [ ] Protocol detection implemented (WS vs WSS)
+- [ ] Server has CORS headers enabled
+- [ ] WebSocket server attached to HTTP server
+- [ ] Connection timeout and retry logic implemented
+- [ ] Error handling shows detailed connection status
 
 ## Quick Reference Commands
 
