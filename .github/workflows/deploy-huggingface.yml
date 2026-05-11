@@ -1,0 +1,25 @@
+name: Deploy to Hugging Face Spaces
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to Hugging Face
+        uses: huggingface/hf-login@v2
+        with:
+          hf_token: ${{ secrets.HF_TOKEN }}
+
+      - name: Build and push Docker image
+        env:
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          docker build -t registry.huggingface.co/$HF_SPACE_ID .
+          docker push registry.huggingface.co/$HF_SPACE_ID

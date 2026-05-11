@@ -364,8 +364,8 @@ wss.on('connection', (ws) => {
 
 // Initialize and start server
 initPlatforms();
-server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+server.listen(7860, () => {
+    console.log(`Server running on http://localhost:7860`);
     
     // Start game loop
     setInterval(gameLoop, TICK_INTERVAL);
