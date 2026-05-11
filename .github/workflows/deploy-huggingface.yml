@@ -17,8 +17,7 @@ jobs:
 
       - name: Install Hugging Face CLI
         run: |
-          wget -q https://github.com/huggingface/huggingface_hub/releases/download/v0.20.2/huggingface_hub-0.20.2-py3-none-any.whl
-          pip install huggingface_hub-0.20.2-py3-none-any.whl
+          pip install huggingface_hub
 
       - name: Login to Hugging Face
         run: |
