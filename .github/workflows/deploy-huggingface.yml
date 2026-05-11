@@ -8,6 +8,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_USERNAME: ${{ secrets.HF_USERNAME }}
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,23 +20,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install Hugging Face CLI
+      - name: Debug variables
         run: |
-          pip install huggingface_hub
+          echo "HF_SPACE_ID=${HF_SPACE_ID}"
+          echo "HF_USERNAME=${HF_USERNAME}"
+          echo "HF_TOKEN length=${#HF_TOKEN}"
 
       - name: Login to Hugging Face
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          hf auth login --token $HF_TOKEN
-
-      - name: Debug HF_SPACE_ID
-        run: echo "HF_SPACE_ID=${HF_SPACE_ID}"
+          echo $HF_TOKEN | docker login registry.huggingface.co --username $HF_USERNAME --password-stdin
 
       - name: Build and push Docker image
-        env:
-          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           docker build -t registry.huggingface.co/${HF_SPACE_ID}:latest .
           docker push registry.huggingface.co/${HF_SPACE_ID}:latest
