@@ -34,5 +34,5 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -t ${HF_SPACE_ID} .
+          docker build -t grentjan35/basic-multiplayer .
           hf docker push ${HF_SPACE_ID}
