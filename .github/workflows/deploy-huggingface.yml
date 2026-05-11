@@ -20,8 +20,10 @@ jobs:
           pip install huggingface_hub
 
       - name: Login to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo ${{ secrets.HF_TOKEN }} | hf auth login
+          hf auth login --token $HF_TOKEN
 
       - name: Build and push Docker image
         env:
