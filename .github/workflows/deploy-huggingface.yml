@@ -25,10 +25,13 @@ jobs:
         run: |
           hf auth login --token $HF_TOKEN
 
+      - name: Debug HF_SPACE_ID
+        run: echo "HF_SPACE_ID=${HF_SPACE_ID}"
+
       - name: Build and push Docker image
         env:
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          docker build -t registry.huggingface.co/${HF_SPACE_ID} .
-          hf push registry.huggingface.co/${HF_SPACE_ID}
+          docker build -t registry.huggingface.co/${HF_SPACE_ID}:latest .
+          docker push registry.huggingface.co/${HF_SPACE_ID}:latest
