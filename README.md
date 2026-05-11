@@ -32,22 +32,17 @@ A lightweight multiplayer platformer game with server-authoritative physics.
 
 ## Embedding
 
-**Option 1: Direct iframe URL**
+**Direct URL (no Hugging Face UI):**
 ```
-https://huggingface.co/spaces/Grentjan35/Basic-Multiplayer/iframe
-```
-
-**Option 2: Embed with parameters (if iframe doesn't work)**
-```
-https://huggingface.co/spaces/Grentjan35/Basic-Multiplayer?embed=true
+https://grentjan35-basic-multiplayer.hf.space/
 ```
 
-**Option 3: Direct embed for your website**
+**For embedding on your website:**
 ```html
-<iframe src="https://huggingface.co/spaces/Grentjan35/Basic-Multiplayer"
+<iframe src="https://grentjan35-basic-multiplayer.hf.space/"
         style="width:100%; height:100vh; border:none;"
         sandbox="allow-scripts allow-same-origin">
 </iframe>
 ```
 
-*Note: Docker SDK Spaces may need to be fully deployed before iframe mode works.*
+*Note: Docker SDK Spaces serve the game directly without the /iframe endpoint.*
