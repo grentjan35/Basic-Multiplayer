@@ -21,7 +21,7 @@ jobs:
 
       - name: Login to Hugging Face
         run: |
-          echo ${{ secrets.HF_TOKEN }} | hf auth login --token
+          echo ${{ secrets.HF_TOKEN }} | hf auth login
 
       - name: Build and push Docker image
         env:
