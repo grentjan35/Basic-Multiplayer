@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server-Authoritative Platformer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1a1a1a;
+            color: #888;
+            font-family: 'Courier New', monospace;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0d0d0d;
+        }
+
+        #playerCount {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 12px;
+            color: #555;
+            z-index: 10;
+        }
+
+        #minimap {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+            height: 80px;
+            background-color: #0d0d0d;
+            border: 1px solid #333;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="canvas"></canvas>
+        <div id="playerCount">Players: 0</div>
+        <canvas id="minimap"></canvas>
+    </div>
+
+    <script>
+        // Client configuration
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const playerCount = document.getElementById('playerCount');
+        const minimapCanvas = document.getElementById('minimap');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        
+        let ws = null;
+        let myPlayerId = null;
+        let platforms = [];
+        let players = [];
+        let worldWidth = 0;
+        let worldHeight = 0;
+        
+        // Interpolation system
+        const INTERPOLATION_DELAY = 60; // ms
+        const playerStates = new Map(); // Store past states for interpolation
+        
+        // Input state - only for sending to server
+        const inputs = {
+            left: false,
+            right: false,
+            jump: false
+        };
+
+        // Resize canvas to full window
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Interpolate between two states
+        function interpolateState(state1, state2, alpha) {
+            return {
+                x: state1.x + (state2.x - state1.x) * alpha,
+                y: state1.y + (state2.y - state1.y) * alpha,
+                color: state1.color
+            };
+        }
+
+        // Get interpolated player state
+        function getInterpolatedPlayerState(playerId) {
+            const states = playerStates.get(playerId);
+            if (!states || states.length < 2) {
+                return null;
+            }
+
+            const renderTime = Date.now() - INTERPOLATION_DELAY;
+            
+            // Find two states to interpolate between
+            let prevState = null;
+            let nextState = null;
+            
+            for (let i = 0; i < states.length - 1; i++) {
+                if (states[i].timestamp <= renderTime && states[i + 1].timestamp > renderTime) {
+                    prevState = states[i];
+                    nextState = states[i + 1];
+                    break;
+                }
+            }
+            
+            // If we couldn't find states around render time, use the oldest available
+            if (!prevState && states.length >= 2) {
+                prevState = states[states.length - 2];
+                nextState = states[states.length - 1];
+            }
+            
+            if (!prevState || !nextState) {
+                return states[states.length - 1];
+            }
+            
+            // Calculate interpolation alpha
+            const timeDiff = nextState.timestamp - prevState.timestamp;
+            const alpha = (renderTime - prevState.timestamp) / timeDiff;
+            
+            return interpolateState(prevState, nextState, Math.max(0, Math.min(1, alpha)));
+        }
+
+        // Connect to server
+        function connect() {
+            ws = new WebSocket('ws://localhost:3000');
+            
+            ws.onopen = () => {
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const timestamp = Date.now();
+                
+                if (data.type === 'init') {
+                    myPlayerId = data.id;
+                    platforms = data.platforms;
+                    worldWidth = data.worldWidth;
+                    worldHeight = data.worldHeight;
+                } else if (data.type === 'state') {
+                    // Store state with timestamp for interpolation
+                    for (const player of data.players) {
+                        if (!playerStates.has(player.id)) {
+                            playerStates.set(player.id, []);
+                        }
+                        const states = playerStates.get(player.id);
+                        states.push({
+                            x: player.x,
+                            y: player.y,
+                            color: player.color,
+                            timestamp: timestamp
+                        });
+                        
+                        // Keep only last 500ms of states
+                        while (states.length > 0 && timestamp - states[0].timestamp > 500) {
+                            states.shift();
+                        }
+                    }
+                    
+                    // Remove states for disconnected players
+                    const currentIds = new Set(data.players.map(p => p.id));
+                    for (const [id, states] of playerStates) {
+                        if (!currentIds.has(id)) {
+                            playerStates.delete(id);
+                        }
+                    }
+                    
+                    playerCount.textContent = `Players: ${data.players.length}`;
+                }
+            };
+            
+            ws.onclose = () => {
+                setTimeout(connect, 2000);
+            };
+            
+            ws.onerror = (error) => {
+            };
+        }
+
+        // Send input to server
+        function sendInput() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'input',
+                    inputs: inputs
+                }));
+            }
+        }
+
+        // Input handlers
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'ArrowLeft':
+                case 'KeyA':
+                    inputs.left = true;
+                    break;
+                case 'ArrowRight':
+                case 'KeyD':
+                    inputs.right = true;
+                    break;
+                case 'Space':
+                case 'ArrowUp':
+                case 'KeyW':
+                    inputs.jump = true;
+                    break;
+            }
+            sendInput();
+        });
+
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'ArrowLeft':
+                case 'KeyA':
+                    inputs.left = false;
+                    break;
+                case 'ArrowRight':
+                case 'KeyD':
+                    inputs.right = false;
+                    break;
+                case 'Space':
+                case 'ArrowUp':
+                case 'KeyW':
+                    inputs.jump = false;
+                    break;
+            }
+            sendInput();
+        });
+
+        // Render function - CLIENT ONLY, no physics
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#0d0d0d';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Get interpolated player states
+            const interpolatedPlayers = [];
+            for (const [playerId, states] of playerStates) {
+                const state = getInterpolatedPlayerState(playerId);
+                if (state) {
+                    interpolatedPlayers.push({ id: playerId, ...state });
+                }
+            }
+            
+            // Find local player for camera
+            let localPlayer = null;
+            for (const player of interpolatedPlayers) {
+                if (player.id === myPlayerId) {
+                    localPlayer = player;
+                    break;
+                }
+            }
+            
+            // Camera always centered on local player
+            let cameraX = 0;
+            let cameraY = 0;
+            if (localPlayer) {
+                cameraX = localPlayer.x - canvas.width / 2 + 16;
+                cameraY = localPlayer.y - canvas.height / 2 + 24;
+            }
+            
+            ctx.save();
+            ctx.translate(-cameraX, -cameraY);
+            
+            // Draw platforms
+            ctx.fillStyle = '#2a2a2a';
+            for (const plat of platforms) {
+                ctx.fillRect(plat.x, plat.y, plat.w, plat.h);
+                ctx.strokeStyle = '#333';
+                ctx.strokeRect(plat.x, plat.y, plat.w, plat.h);
+            }
+            
+            // Draw players with interpolation
+            for (const player of interpolatedPlayers) {
+                ctx.fillStyle = player.color;
+                ctx.fillRect(player.x, player.y, 32, 48);
+                
+                // Draw border
+                ctx.strokeStyle = '#444';
+                ctx.strokeRect(player.x, player.y, 32, 48);
+            }
+            
+            ctx.restore();
+            
+            // Render mini-map
+            if (worldWidth > 0 && worldHeight > 0) {
+                minimapCtx.fillStyle = '#0d0d0d';
+                minimapCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+                
+                // Find local player for camera center
+                let localPlayer = null;
+                for (const player of interpolatedPlayers) {
+                    if (player.id === myPlayerId) {
+                        localPlayer = player;
+                        break;
+                    }
+                }
+                
+                // Zoom level - show 1/4 of the world
+                const zoomLevel = 0.25;
+                const viewWidth = worldWidth * zoomLevel;
+                const viewHeight = worldHeight * zoomLevel;
+                
+                // Camera position on mini-map (centered on local player)
+                let cameraX = 0;
+                let cameraY = 0;
+                if (localPlayer) {
+                    cameraX = localPlayer.x - viewWidth / 2;
+                    cameraY = localPlayer.y - viewHeight / 2;
+                }
+                
+                // Clamp camera to world bounds
+                cameraX = Math.max(0, Math.min(cameraX, worldWidth - viewWidth));
+                cameraY = Math.max(0, Math.min(cameraY, worldHeight - viewHeight));
+                
+                const scaleX = minimapCanvas.width / viewWidth;
+                const scaleY = minimapCanvas.height / viewHeight;
+                
+                // Draw platforms on mini-map
+                minimapCtx.fillStyle = '#2a2a2a';
+                for (const plat of platforms) {
+                    const minimapX = (plat.x - cameraX) * scaleX;
+                    const minimapY = (plat.y - cameraY) * scaleY;
+                    const minimapW = plat.w * scaleX;
+                    const minimapH = plat.h * scaleY;
+                    minimapCtx.fillRect(minimapX, minimapY, minimapW, minimapH);
+                }
+                
+                // Draw players on mini-map
+                for (const player of interpolatedPlayers) {
+                    const minimapX = (player.x - cameraX) * scaleX;
+                    const minimapY = (player.y - cameraY) * scaleY;
+                    
+                    if (player.id === myPlayerId) {
+                        minimapCtx.fillStyle = '#666';
+                    } else {
+                        minimapCtx.fillStyle = player.color;
+                    }
+                    
+                    minimapCtx.beginPath();
+                    minimapCtx.arc(minimapX, minimapY, 3, 0, Math.PI * 2);
+                    minimapCtx.fill();
+                }
+            }
+            
+            requestAnimationFrame(render);
+        }
+
+        // Initialize
+        connect();
+        render();
+    </script>
+</body>
+</html>

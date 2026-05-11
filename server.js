@@ -1,0 +1,372 @@
+const WebSocket = require('ws');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// Server configuration
+const PORT = 3000;
+const TICK_RATE = 60; // Server updates per second
+const TICK_INTERVAL = 1000 / TICK_RATE;
+
+// Physics constants - SERVER ONLY
+const GRAVITY = 0.5;
+const FRICTION = 1.0;
+const AIR_RESISTANCE = 0.98;
+const MOVE_SPEED = 0.5;
+const JUMP_FORCE = 10;
+const MAX_FALL_SPEED = 12;
+const PLAYER_WIDTH = 32;
+const PLAYER_HEIGHT = 48;
+
+// World dimensions
+const WORLD_WIDTH = 5000;
+const WORLD_HEIGHT = 2000;
+
+// Game state - SERVER ONLY
+const players = new Map();
+let platforms = [];
+let playerIdCounter = 0;
+
+// Initialize platforms - huge map
+function initPlatforms() {
+    platforms = [];
+    
+    // Ground floor across entire world
+    platforms.push({ x: 0, y: WORLD_HEIGHT - 100, w: WORLD_WIDTH, h: 100 });
+    
+    // Add low platforms touching ground for accessibility
+    for (let x = 200; x < WORLD_WIDTH; x += 500) {
+        platforms.push({ x, y: WORLD_HEIGHT - 150, w: 150, h: 20 });
+    }
+    
+    // Generate random platforms with spacing
+    for (let i = 0; i < 150; i++) {
+        const x = Math.random() * (WORLD_WIDTH - 300);
+        const y = 200 + Math.random() * (WORLD_HEIGHT - 500);
+        const w = 100 + Math.random() * 150;
+        const h = 20;
+        
+        // Check for overlap with existing platforms
+        let overlaps = false;
+        for (const plat of platforms) {
+            const buffer = 100; // Increased spacing
+            if (x < plat.x + plat.w + buffer &&
+                x + w > plat.x - buffer &&
+                y < plat.y + plat.h + buffer &&
+                y + h > plat.y - buffer) {
+                overlaps = true;
+                break;
+            }
+        }
+        
+        if (!overlaps) {
+            platforms.push({ x, y, w, h });
+        }
+    }
+    
+    // Add some structured platforms for navigation with increased spacing
+    for (let x = 100; x < WORLD_WIDTH; x += 500) {
+        for (let y = 300; y < WORLD_HEIGHT - 200; y += 300) {
+            platforms.push({ x, y, w: 150, h: 20 });
+        }
+    }
+}
+
+// Create HTTP server for serving static files
+const server = http.createServer((req, res) => {
+    if (req.url === '/') {
+        fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Error loading index.html');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(data);
+        });
+    } else {
+        res.writeHead(404);
+        res.end('Not found');
+    }
+});
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ server });
+
+// Player class - SERVER ONLY
+class Player {
+    constructor(id, x, y) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        this.onGround = false;
+        this.color = this.generateDarkColor();
+        this.inputs = { left: false, right: false, jump: false };
+    }
+
+    // Generate dark, desaturated colors
+    generateDarkColor() {
+        const hue = Math.floor(Math.random() * 360);
+        return `hsl(${hue}, 20%, 35%)`;
+    }
+}
+
+// Add new player
+function addPlayer(ws) {
+    const id = ++playerIdCounter;
+    // Spawn on top of ground platform
+    const player = new Player(id, 100, WORLD_HEIGHT - 100 - PLAYER_HEIGHT);
+    players.set(id, { player, ws });
+    
+    ws.send(JSON.stringify({
+        type: 'init',
+        id: id,
+        platforms: platforms,
+        worldWidth: WORLD_WIDTH,
+        worldHeight: WORLD_HEIGHT
+    }));
+    
+    return id;
+}
+
+// Remove player
+function removePlayer(id) {
+    players.delete(id);
+}
+
+// Apply physics to player - SERVER ONLY
+function applyPhysics(player) {
+    // Apply gravity
+    player.vy += GRAVITY;
+    
+    // Apply air resistance
+    player.vx *= AIR_RESISTANCE;
+    
+    // Clamp fall speed
+    if (player.vy > MAX_FALL_SPEED) {
+        player.vy = MAX_FALL_SPEED;
+    }
+    
+    // Apply input forces
+    if (player.inputs.left) {
+        player.vx -= MOVE_SPEED;
+    }
+    if (player.inputs.right) {
+        player.vx += MOVE_SPEED;
+    }
+    if (player.inputs.jump && player.onGround) {
+        // Scale jump force based on horizontal velocity
+        const speedBonus = Math.abs(player.vx) * 0.5;
+        player.vy = -(JUMP_FORCE + speedBonus);
+        player.onGround = false;
+    }
+    
+    // Apply friction when on ground
+    if (player.onGround) {
+        player.vx *= FRICTION;
+    }
+    
+    // Update position
+    player.x += player.vx;
+    player.y += player.vy;
+    
+    // World bounds
+    if (player.x < 0) {
+        player.x = 0;
+        player.vx = 0;
+    }
+    if (player.x > WORLD_WIDTH - PLAYER_WIDTH) {
+        player.x = WORLD_WIDTH - PLAYER_WIDTH;
+        player.vx = 0;
+    }
+    
+    // Reset if fallen off map
+    if (player.y > WORLD_HEIGHT + 100) {
+        player.x = 100;
+        player.y = WORLD_HEIGHT - 200;
+        player.vx = 0;
+        player.vy = 0;
+    }
+}
+
+// Check collision - SERVER ONLY
+function checkCollision(player) {
+    player.onGround = false;
+    
+    for (const plat of platforms) {
+        // Check if player is colliding with platform
+        if (player.x + PLAYER_WIDTH > plat.x &&
+            player.x < plat.x + plat.w &&
+            player.y + PLAYER_HEIGHT > plat.y &&
+            player.y < plat.y + plat.h) {
+            
+            // Determine collision side
+            const overlapLeft = (player.x + PLAYER_WIDTH) - plat.x;
+            const overlapRight = (plat.x + plat.w) - player.x;
+            const overlapTop = (player.y + PLAYER_HEIGHT) - plat.y;
+            const overlapBottom = (plat.y + plat.h) - player.y;
+            
+            const minOverlapX = Math.min(overlapLeft, overlapRight);
+            const minOverlapY = Math.min(overlapTop, overlapBottom);
+            
+            if (minOverlapY < minOverlapX) {
+                if (overlapTop < overlapBottom) {
+                    // Landing on top
+                    player.y = plat.y - PLAYER_HEIGHT;
+                    player.vy = 0;
+                    player.onGround = true;
+                } else {
+                    // Hitting from below
+                    player.y = plat.y + plat.h;
+                    player.vy = 0;
+                }
+            } else {
+                if (overlapLeft < overlapRight) {
+                    // Hitting from left
+                    player.x = plat.x - PLAYER_WIDTH;
+                    player.vx = 0;
+                } else {
+                    // Hitting from right
+                    player.x = plat.x + plat.w;
+                    player.vx = 0;
+                }
+            }
+        }
+    }
+}
+
+// Check player-to-player collision - SERVER ONLY
+function checkPlayerCollisions(currentPlayer) {
+    for (const [id, { player }] of players) {
+        if (id === currentPlayer.id) continue;
+        
+        // Check if players are colliding
+        if (currentPlayer.x + PLAYER_WIDTH > player.x &&
+            currentPlayer.x < player.x + PLAYER_WIDTH &&
+            currentPlayer.y + PLAYER_HEIGHT > player.y &&
+            currentPlayer.y < player.y + PLAYER_HEIGHT) {
+            
+            // Determine collision side
+            const overlapLeft = (currentPlayer.x + PLAYER_WIDTH) - player.x;
+            const overlapRight = (player.x + PLAYER_WIDTH) - currentPlayer.x;
+            const overlapTop = (currentPlayer.y + PLAYER_HEIGHT) - player.y;
+            const overlapBottom = (player.y + PLAYER_HEIGHT) - currentPlayer.y;
+            
+            const minOverlapX = Math.min(overlapLeft, overlapRight);
+            const minOverlapY = Math.min(overlapTop, overlapBottom);
+            
+            // Calculate relative velocity for momentum transfer
+            const relVx = currentPlayer.vx - player.vx;
+            const relVy = currentPlayer.vy - player.vy;
+            
+            if (minOverlapY < minOverlapX) {
+                if (overlapTop < overlapBottom) {
+                    // Current player on top
+                    currentPlayer.y = player.y - PLAYER_HEIGHT;
+                    // Transfer momentum - push current player up, other player down
+                    const pushForce = Math.abs(relVy) * 0.5;
+                    currentPlayer.vy = Math.min(currentPlayer.vy, -pushForce);
+                    player.vy = Math.max(player.vy, pushForce);
+                } else {
+                    // Current player below
+                    currentPlayer.y = player.y + PLAYER_HEIGHT;
+                    // Transfer momentum - push current player down, other player up
+                    const pushForce = Math.abs(relVy) * 0.5;
+                    currentPlayer.vy = Math.max(currentPlayer.vy, pushForce);
+                    player.vy = Math.min(player.vy, -pushForce);
+                }
+            } else {
+                if (overlapLeft < overlapRight) {
+                    // Current player on left
+                    currentPlayer.x = player.x - PLAYER_WIDTH;
+                    // Transfer momentum - push current player left, other player right
+                    const pushForce = Math.abs(relVx) * 0.5;
+                    currentPlayer.vx = Math.min(currentPlayer.vx, -pushForce);
+                    player.vx = Math.max(player.vx, pushForce);
+                } else {
+                    // Current player on right
+                    currentPlayer.x = player.x + PLAYER_WIDTH;
+                    // Transfer momentum - push current player right, other player left
+                    const pushForce = Math.abs(relVx) * 0.5;
+                    currentPlayer.vx = Math.max(currentPlayer.vx, pushForce);
+                    player.vx = Math.min(player.vx, -pushForce);
+                }
+            }
+        }
+    }
+}
+
+// Main game loop - SERVER ONLY
+function gameLoop() {
+    // Update all players
+    for (const [id, { player }] of players) {
+        applyPhysics(player);
+        checkCollision(player);
+        checkPlayerCollisions(player);
+    }
+    
+    // Send state to all clients
+    const playerStates = [];
+    for (const [id, { player }] of players) {
+        playerStates.push({
+            id: id,
+            x: player.x,
+            y: player.y,
+            color: player.color
+        });
+    }
+    
+    const message = JSON.stringify({
+        type: 'state',
+        players: playerStates
+    });
+    
+    for (const [id, { ws }] of players) {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(message);
+        }
+    }
+}
+
+// Handle WebSocket connections
+wss.on('connection', (ws) => {
+    console.log('Client connected');
+    
+    const playerId = addPlayer(ws);
+    
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            
+            if (data.type === 'input') {
+                const playerData = players.get(playerId);
+                if (playerData) {
+                    playerData.player.inputs = data.inputs;
+                }
+            }
+        } catch (e) {
+            console.error('Error parsing message:', e);
+        }
+    });
+    
+    ws.on('close', () => {
+        console.log('Client disconnected');
+        removePlayer(playerId);
+    });
+    
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+        removePlayer(playerId);
+    });
+});
+
+// Initialize and start server
+initPlatforms();
+server.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Start game loop
+    setInterval(gameLoop, TICK_INTERVAL);
+});
