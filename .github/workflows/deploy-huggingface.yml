@@ -21,11 +21,11 @@ jobs:
 
       - name: Login to Hugging Face
         run: |
-          echo ${{ secrets.HF_TOKEN }} | huggingface-cli login --token
+          echo ${{ secrets.HF_TOKEN }} | hf auth login --token
 
       - name: Build and push Docker image
         env:
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
         run: |
           docker build -t registry.huggingface.co/$HF_SPACE_ID .
-          echo ${{ secrets.HF_TOKEN }} | huggingface-cli repo push registry.huggingface.co/$HF_SPACE_ID
+          echo ${{ secrets.HF_TOKEN }} | hf push registry.huggingface.co/$HF_SPACE_ID
