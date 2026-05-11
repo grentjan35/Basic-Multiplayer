@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 
 // Server configuration
-const PORT = 3000;
 const TICK_RATE = 60; // Server updates per second
 const TICK_INTERVAL = 1000 / TICK_RATE;
 
