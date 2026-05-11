@@ -15,16 +15,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Hugging Face Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: registry.huggingface.co
-          username: ${{ secrets.HF_USERNAME }}
-          password: ${{ secrets.HF_TOKEN }}
+      - name: Install Hugging Face CLI
+        run: |
+          wget -q https://github.com/huggingface/huggingface_hub/releases/download/v0.20.2/huggingface_hub-0.20.2-py3-none-any.whl
+          pip install huggingface_hub-0.20.2-py3-none-any.whl
+
+      - name: Login to Hugging Face
+        run: |
+          echo ${{ secrets.HF_TOKEN }} | huggingface-cli login --token
 
       - name: Build and push Docker image
         env:
           HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
         run: |
           docker build -t registry.huggingface.co/$HF_SPACE_ID .
-          docker push registry.huggingface.co/$HF_SPACE_ID
+          echo ${{ secrets.HF_TOKEN }} | huggingface-cli repo push registry.huggingface.co/$HF_SPACE_ID
