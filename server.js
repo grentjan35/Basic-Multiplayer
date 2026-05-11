@@ -4,14 +4,14 @@ const fs = require('fs');
 const path = require('path');
 
 // Server configuration
-const TICK_RATE = 45; // Server updates per second (balanced for cloud performance)
+const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
 const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
 const GRAVITY = 0.5;
 const FRICTION = 1.0;
 const AIR_RESISTANCE = 0.98;
-const MOVE_SPEED = 0.6; // Increased for more responsive movement
+const MOVE_SPEED = 0.5;
 const JUMP_FORCE = 10;
 const MAX_FALL_SPEED = 12;
 const PLAYER_WIDTH = 32;

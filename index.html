@@ -92,7 +92,7 @@
         let worldHeight = 0;
         
         // Interpolation system
-        const INTERPOLATION_DELAY = 50; // ms (optimized for responsive gameplay)
+        const INTERPOLATION_DELAY = 100; // ms (increased for cloud network latency)
         const playerStates = new Map(); // Store past states for interpolation
         
         // Input state - only for sending to server
@@ -214,8 +214,8 @@
                             timestamp: timestamp
                         });
                         
-                        // Keep only last 200ms of states (optimized for 50ms interpolation delay)
-                        while (states.length > 0 && timestamp - states[0].timestamp > 200) {
+                        // Keep only last 300ms of states (reduced for better memory management)
+                        while (states.length > 0 && timestamp - states[0].timestamp > 300) {
                             states.shift();
                         }
                     }
