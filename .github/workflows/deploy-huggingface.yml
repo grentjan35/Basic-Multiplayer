@@ -26,7 +26,7 @@ jobs:
 
       - name: Login to Hugging Face
         run: |
-          echo $HF_TOKEN | docker login registry.huggingface.co --password-stdin
+          echo $HF_TOKEN | docker login registry.huggingface.co --username token --password-stdin
 
       - name: Build and push Docker image
         run: |
