@@ -30,7 +30,7 @@ jobs:
 
       - name: Login to Hugging Face
         run: |
-          echo $HF_TOKEN | hf login --token
+          echo $HF_TOKEN | hf auth login
 
       - name: Build and push Docker image
         run: |
