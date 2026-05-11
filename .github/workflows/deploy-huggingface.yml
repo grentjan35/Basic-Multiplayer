@@ -48,4 +48,4 @@ jobs:
       - name: Push to Hugging Face Space
         run: |
           cd huggingface-space
-          echo $HF_TOKEN | git push https://huggingface.co/spaces/${HF_SPACE_ID} main
+          git push https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} main
