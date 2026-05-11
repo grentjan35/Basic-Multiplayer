@@ -73,6 +73,11 @@ function initPlatforms() {
 
 // Create HTTP server for serving static files
 const server = http.createServer((req, res) => {
+    // Add CORS headers for all requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
     if (req.url === '/') {
         fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
             if (err) {

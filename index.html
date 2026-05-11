@@ -149,17 +149,31 @@
 
         // Connect to server
         function connect() {
-            // Detect if we're on Hugging Face or localhost
-            const isHuggingFace = window.location.hostname.includes('huggingface.co');
+            // Always use the current host for WebSocket connection
+            // This works for both localhost and Hugging Face
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsHost = isHuggingFace ? window.location.host : 'localhost:7860';
+            const wsHost = window.location.host;
             const wsUrl = `${wsProtocol}//${wsHost}`;
             
             console.log('Connecting to WebSocket at:', wsUrl);
             console.log('Current hostname:', window.location.hostname);
-            console.log('Is Hugging Face:', isHuggingFace);
+            console.log('Current host:', window.location.host);
+            console.log('Protocol:', window.location.protocol);
+            
+            // Close existing connection if any
+            if (ws && ws.readyState !== WebSocket.CLOSED) {
+                ws.close();
+            }
             
             ws = new WebSocket(wsUrl);
+            
+            // Add connection timeout
+            setTimeout(() => {
+                if (ws && ws.readyState === WebSocket.CONNECTING) {
+                    console.log('Connection timeout, closing and retrying...');
+                    ws.close();
+                }
+            }, 5000);
             
             ws.onopen = () => {
                 console.log('WebSocket connected successfully');
@@ -207,15 +221,16 @@
                 }
             };
             
-            ws.onclose = () => {
-                console.log('WebSocket disconnected, attempting to reconnect...');
+            ws.onclose = (event) => {
+                console.log('WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
                 playerCount.textContent = 'Disconnected - Reconnecting...';
                 setTimeout(connect, 2000);
             };
             
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                playerCount.textContent = 'Connection error';
+                console.error('WebSocket readyState:', ws.readyState);
+                playerCount.textContent = 'Connection error - Retrying...';
             };
         }
 
