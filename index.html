@@ -123,7 +123,8 @@
             left: false,
             right: false,
             jump: false,
-            attack: false
+            attack: false,
+            down: false
         };
 
         // Cooldown to prevent attack from re-triggering every tick while held
@@ -372,13 +373,13 @@
             
             const anim = playerAnimations.get(playerId);
             
-            // Map combo stage to attack animation frame
+            // Map combo stage to attack animation frame (5-stage: jab→cross→jab→cross→kick)
             let frameName = '';
-            if (comboStage === 1) {
+            if (comboStage === 1 || comboStage === 3) {
                 frameName = 'jab';
-            } else if (comboStage === 2) {
+            } else if (comboStage === 2 || comboStage === 4) {
                 frameName = 'cross';
-            } else if (comboStage === 3) {
+            } else if (comboStage === 5) {
                 frameName = 'kick';
             }
             
@@ -620,7 +621,8 @@
                         left: inputs.left,
                         right: inputs.right,
                         jump: inputs.jump,
-                        attack: inputs.attack
+                        attack: inputs.attack,
+                        down: inputs.down
                     }
                 }));
             }
@@ -648,6 +650,10 @@
                         attackInputSent = true;
                     }
                     break;
+                case 'ArrowDown':
+                case 'KeyS':
+                    inputs.down = true;
+                    break;
             }
             sendInput();
         });
@@ -669,6 +675,10 @@
                 case 'Space':
                     inputs.attack = false;
                     attackInputSent = false;
+                    break;
+                case 'ArrowDown':
+                case 'KeyS':
+                    inputs.down = false;
                     break;
                 case 'KeyH':
                     if (e.shiftKey && HITBOX_TOGGLE_ENABLED) {

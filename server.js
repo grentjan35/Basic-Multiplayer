@@ -28,10 +28,13 @@ const ATTACK_HITBOX_WIDTH = 30;
 const ATTACK_HITBOX_HEIGHT = 40; // height of attack hitbox (waist-to-head area)
 
 // Combo stages: [damage, knockbackForce, name]
+// Sequence: jab → cross → jab → cross → kick (5 presses total)
 const COMBO_DATA = [
     { damage: 10, knockback: 15, name: 'jab' },
     { damage: 20, knockback: 25, name: 'cross' },
-    { damage: 35, knockback: 45, name: 'kick' }
+    { damage: 10, knockback: 15, name: 'jab' },
+    { damage: 20, knockback: 25, name: 'cross' },
+    { damage: 45, knockback: 65, name: 'kick' }
 ];
 
 // Health
@@ -206,6 +209,7 @@ class Player {
         this.color = this.generateDarkColor();
         this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
         this.inputs = { left: false, right: false, jump: false, attack: false };
+        this.attackProcessed = false; // Prevents attack spam while holding space
         this.gotHit = false; // Tracks if player was hit this frame
         
         // Attack combo system
@@ -298,19 +302,24 @@ function applyPhysics(player) {
         player.vy = -(JUMP_FORCE + speedBonus);
         player.onGround = false;
     }
+    // Fast-fall: hold down (S/ArrowDown) to fall faster
+    if (player.inputs.down && !player.onGround) {
+        player.vy += 1.5; // Extra downward acceleration per tick
+    }
     
-    // Process attack input
-    if (player.inputs.attack) {
+    // Process attack input (only once per press, not every tick while held)
+    if (player.inputs.attack && !player.attackProcessed) {
+        player.attackProcessed = true;
         // Check combo timing
         const now = Date.now();
         if (now - player.lastAttackTime > ATTACK_TIMEOUT) {
             // Too long since last attack, restart combo
             player.comboStage = 1;
-        } else if (player.comboStage < 3) {
+        } else if (player.comboStage < 5) {
             // Advance combo
             player.comboStage++;
         } else {
-            // Max combo (kick), restart
+            // Max combo (kick), restart at jab
             player.comboStage = 1;
         }
         
@@ -323,6 +332,11 @@ function applyPhysics(player) {
     // Deactivate attack if expired
     if (player.attackActive && Date.now() > player.attackEndTime) {
         player.attackActive = false;
+    }
+    
+    // Reset attackProcessed when space is released
+    if (!player.inputs.attack) {
+        player.attackProcessed = false;
     }
     
     // Apply friction when on ground
@@ -423,11 +437,14 @@ function getAttackHitbox(player) {
     hitboxY = player.y + yOffset;
     
     // Different attacks have different ranges
+    // Jab and cross require being close; kick has long range
     let extend = ATTACK_HITBOX_EXTEND;
-    if (combo.name === 'kick') {
-        extend = ATTACK_HITBOX_EXTEND * 1.5; // kick has more range
+    if (combo.name === 'jab') {
+        extend = ATTACK_HITBOX_EXTEND * 0.5; // short range - must be close
     } else if (combo.name === 'cross') {
-        extend = ATTACK_HITBOX_EXTEND * 1.2;
+        extend = ATTACK_HITBOX_EXTEND * 0.7; // medium-short range
+    } else if (combo.name === 'kick') {
+        extend = ATTACK_HITBOX_EXTEND * 1.5; // long range (unchanged)
     }
     
     return {
@@ -440,6 +457,35 @@ function getAttackHitbox(player) {
         direction: player.facingRight ? 1 : -1,
         stage: stage
     };
+}
+
+// Kick magnet: pull kick attackers toward the nearest opponent (lunge effect)
+function applyKickMagnet() {
+    for (const [id, { player }] of players) {
+        // Only pull when kick attack (stage 5) is active
+        if (player.comboStage === 5 && player.attackActive) {
+            let nearestDist = Infinity;
+            let nearestPlayer = null;
+            
+            for (const [oid, { player: other }] of players) {
+                if (oid === id) continue;
+                const dx = other.x - player.x;
+                const dy = (other.y + PLAYER_HEIGHT / 2) - (player.y + PLAYER_HEIGHT / 2);
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestPlayer = other;
+                }
+            }
+            
+            if (nearestPlayer) {
+                const dx = nearestPlayer.x - player.x;
+                const dir = dx > 0 ? 1 : -1;
+                // Strong pull toward opponent (lunge) — does NOT override facing direction
+                player.vx += dir * 2.5;
+            }
+        }
+    }
 }
 
 // Check player-to-player collisions AND attack hits - SERVER ONLY
@@ -473,10 +519,11 @@ function checkPlayerCollisions(currentPlayer) {
                 // Deal damage
                 player.health -= attackHitbox.damage;
                 
-                // Apply knockback with greater force
+                // Apply knockback - kick sends opponents flying high
                 const knockbackForce = attackHitbox.knockback;
+                const verticalMultiplier = attackHitbox.stage === 4 ? 1.5 : 0.6; // Kick launches high (stage 4 = 5th combo press)
                 player.vx = attackHitbox.direction * knockbackForce;
-                player.vy = -knockbackForce * 0.6; // Launch upward too
+                player.vy = -knockbackForce * verticalMultiplier; // Launch upward
                 player.onGround = false;
                 
                 // Mark as hit
@@ -572,6 +619,9 @@ function gameLoop() {
         checkCollision(player);
         checkPlayerCollisions(player);
     }
+    
+    // Apply kick magnet (lunge effect toward opponents)
+    applyKickMagnet();
     
     // Send state to all clients (only if there are players)
     if (players.size > 0) {
