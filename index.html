@@ -236,12 +236,20 @@
                     frameIndex: 0,
                     lastFrameTime: Date.now(),
                     facingRight: true,
-                    landingEndTime: 0
+                    landingEndTime: 0,
+                    hitEndTime: 0
                 });
             }
             
             const anim = playerAnimations.get(playerId);
             const now = Date.now();
+            
+            // Check if player is in hit stun animation
+            if (now < anim.hitEndTime) {
+                anim.currentAnimation = 'hit';
+                anim.frameIndex = 0;
+                return;
+            }
             
             // Update facing direction based on velocity
             if (playerState.vx < -0.1) {
@@ -321,7 +329,8 @@
                     frameIndex: 0,
                     lastFrameTime: Date.now(),
                     facingRight: true,
-                    landingEndTime: 0
+                    landingEndTime: 0,
+                    hitEndTime: 0
                 });
             }
             
@@ -460,6 +469,9 @@
                             playerStates.set(player.id, []);
                         }
                         const states = playerStates.get(player.id);
+                        // Check if this new state has gotHit flag and trigger animation
+                        const gotHit = player.gotHit === true;
+                        
                         states.push({
                             x: player.x,
                             y: player.y,
@@ -468,8 +480,26 @@
                             onGround: player.onGround,
                             color: player.color,
                             sprite: player.sprite,
+                            gotHit: gotHit,
                             timestamp: timestamp
                         });
+                        
+                        // If gotHit is true, trigger hit animation on this player
+                        if (gotHit) {
+                            if (!playerAnimations.has(player.id)) {
+                                playerAnimations.set(player.id, {
+                                    currentAnimation: 'idle',
+                                    frameIndex: 0,
+                                    lastFrameTime: Date.now(),
+                                    facingRight: true,
+                                    landingEndTime: 0,
+                                    hitEndTime: 0
+                                });
+                            }
+                            const anim = playerAnimations.get(player.id);
+                            anim.hitEndTime = Date.now() + 300; // Show hit for 300ms
+                            anim.facingRight = player.vx > -0.1; // Face the direction of momentum
+                        }
                         
                         // Keep only last 300ms of states (reduced for better memory management)
                         while (states.length > 0 && timestamp - states[0].timestamp > 300) {

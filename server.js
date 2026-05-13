@@ -20,6 +20,9 @@ const HITBOX_LEFT_INSET = 14; // Trim empty space on left side of sprite
 const HITBOX_RIGHT_INSET = 0; // Right side is already aligned
 const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET - HITBOX_RIGHT_INSET;
 
+// Hit detection threshold - relative speed above this triggers get_hit
+const HIT_THRESHOLD = 5;
+
 // World dimensions
 const WORLD_WIDTH = 5000;
 const WORLD_HEIGHT = 2000;
@@ -189,6 +192,7 @@ class Player {
         this.color = this.generateDarkColor();
         this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
         this.inputs = { left: false, right: false, jump: false };
+        this.gotHit = false; // Tracks if player was hit this frame
     }
 
     // Generate dark, desaturated colors
@@ -360,6 +364,35 @@ function checkPlayerCollisions(currentPlayer) {
             // Calculate relative velocity for momentum transfer
             const relVx = currentPlayer.vx - player.vx;
             const relVy = currentPlayer.vy - player.vy;
+            const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+            
+            // Check if collision force is strong enough to trigger get_hit
+            // Only the player with LESS speed (the one receiving the impact) gets hit
+            if (relSpeed >= HIT_THRESHOLD) {
+                if (minOverlapY < minOverlapX) {
+                    // Vertical collision - compare vertical speeds
+                    if (Math.abs(currentPlayer.vy) > Math.abs(player.vy)) {
+                        player.gotHit = true; // other player is the victim
+                    } else if (Math.abs(player.vy) > Math.abs(currentPlayer.vy)) {
+                        currentPlayer.gotHit = true; // current player is the victim
+                    } else {
+                        // Equal speeds - both get hit
+                        currentPlayer.gotHit = true;
+                        player.gotHit = true;
+                    }
+                } else {
+                    // Horizontal collision - compare horizontal speeds
+                    if (Math.abs(currentPlayer.vx) > Math.abs(player.vx)) {
+                        player.gotHit = true; // other player is the victim
+                    } else if (Math.abs(player.vx) > Math.abs(currentPlayer.vx)) {
+                        currentPlayer.gotHit = true; // current player is the victim
+                    } else {
+                        // Equal speeds - both get hit
+                        currentPlayer.gotHit = true;
+                        player.gotHit = true;
+                    }
+                }
+            }
             
             if (minOverlapY < minOverlapX) {
                 if (overlapTop < overlapBottom) {
@@ -402,6 +435,11 @@ let totalUpdates = 0;
 function gameLoop() {
     const startTime = process.hrtime.bigint();
     
+    // Reset gotHit flags at the start of each frame
+    for (const [id, { player }] of players) {
+        player.gotHit = false;
+    }
+    
     // Update all players
     for (const [id, { player }] of players) {
         applyPhysics(player);
@@ -421,7 +459,8 @@ function gameLoop() {
                 vy: Math.round(player.vy * 100) / 100,
                 onGround: player.onGround,
                 color: player.color,
-                sprite: player.sprite
+                sprite: player.sprite,
+                gotHit: player.gotHit
             });
         }
         

@@ -30,6 +30,7 @@
     "run":  ["run_01", "run_02", "run_03"],
     "jump": ["jump_prep", "in_air", "landing"],
     "falling": ["falling"],
+    "hit": ["get_hit"],
     "death": ["get_hit", "falling", "dead"]
   }
 }
