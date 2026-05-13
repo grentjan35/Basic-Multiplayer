@@ -613,7 +613,7 @@ function gameLoop() {
     if (now - lastStatsUpdate > 5000) { // Log every 5 seconds
         const endTime = process.hrtime.bigint();
         const avgTime = Number(endTime - startTime) / 1000000; // Convert to milliseconds
-        console.log(`Game loop: ${totalUpdates} updates, avg time: ${avgTime.toFixed(2)}ms, players: ${players.size}`);
+        // console.log(`Game loop: ${totalUpdates} updates, avg time: ${avgTime.toFixed(2)}ms, players: ${players.size}`);
         totalUpdates = 0;
         lastStatsUpdate = now;
     }
