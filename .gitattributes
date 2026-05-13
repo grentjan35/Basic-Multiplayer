@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Track PNG image files with Git LFS (Hugging Face Spaces supports LFS)
+*.png filter=lfs diff=lfs merge=lfs -text
+
+# Treat binary files properly
+*.png binary

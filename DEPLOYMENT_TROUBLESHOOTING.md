@@ -143,7 +143,58 @@ res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 ```
 
+### Error 12: Deployment fails - large image files / API upload timeout
+**Problem**: The `HfApi.upload_folder()` API method times out or fails when uploading large binary PNG files. The previous codebase had spritesheets at 1024x1024-2048x2048 (~10MB total), which exceeds API limits.
+**Solution**: 
+1. **Compress images**: Resize spritesheets to reasonable dimensions:
+   - Base/foundational sprites: 512x512 max
+   - Character spritesheets: 256x256 max
+2. **Use Git-based deployment instead of API upload**: The updated workflow clones the HF Space via Git, uses `rsync` to copy files, then commits and pushes. Git handles large binaries better, especially with **Git LFS**.
+3. **Enable Git LFS for PNGs**: Add to `.gitattributes`:
+   ```
+   *.png filter=lfs diff=lfs merge=lfs -text
+   ```
+4. **Check file sizes before deploying**:
+   ```bash
+   find assets -name "*.png" -exec ls -lh {} \;
+   ```
+
+### Error 13: Git push fails with large files to HF Space
+**Problem**: Hugging Face Spaces has a 1GB repo limit. Unoptimized assets like 2048x2048 PNGs consume this quickly.
+**Solution**: 
+- Compress images to target 50-100KB each for sprites
+- Use `.pngquant` or PIL/Pillow with `optimize=True`
+- Total asset directory should be < 1MB for a game like this
+
+### Error 14: Docker build fails on Hugging Face Space
+**Problem**: If .dockerignore doesn't exclude node_modules properly, the Docker build context becomes too large.
+**Solution**: Ensure .dockerignore has:
+```
+node_modules
+.git
+*.md
+```
+And consider adding `assets/*.png` if they're handled separately.
+
 ## Deployment Process
+
+### Quick Fix: Image Compression Script
+If your assets are oversized, run this Python script (requires Pillow):
+```python
+from PIL import Image
+import glob
+
+for f in glob.glob('assets/*.png'):
+    img = Image.open(f)
+    new_size = 512 if os.path.basename(f) == 'base.png' else 256
+    img.resize((new_size, new_size), Image.LANCZOS).save(f, optimize=True)
+```
+Or install `pngquant` for even better compression.
+
+### Check Current Image Sizes
+```bash
+python -c "from PIL import Image; import os, glob; [print(f'{os.path.basename(f):30s} {Image.open(f).size[0]:5d}x{Image.open(f).size[1]:<5d} {os.path.getsize(f)//1024:6d}KB') for f in glob.glob('assets/*.png')]"
+```
 
 1. **Local Development**:
    ```bash

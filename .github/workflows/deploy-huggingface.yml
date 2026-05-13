@@ -15,43 +15,56 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true  # Enable LFS to properly fetch large PNG files
 
       - name: Install Hugging Face Hub
         run: |
           pip install huggingface_hub
 
-      - name: Deploy to Hugging Face Space via API
+      - name: Clone Hugging Face Space
         run: |
-          python -c "
-import os
-from huggingface_hub import HfApi
+          git lfs install
+          git clone https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} huggingface-space
+          cd huggingface-space
+          git lfs install
 
-# Get credentials
-hf_token = os.environ.get('HF_TOKEN')
-space_id = os.environ.get('HF_SPACE_ID')
+      - name: Sync files to Hugging Face Space
+        run: |
+          # Sync all files EXCEPT the cloned space directory and hidden/git dirs
+          rsync -av --delete \
+            --exclude='huggingface-space' \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.gitignore' \
+            --exclude='DEPLOYMENT_TROUBLESHOOTING.md' \
+            ./ huggingface-space/
+          
+          # Show file sizes for audit
+          echo "=== Asset file sizes ==="
+          find huggingface-space/assets -name "*.png" -exec ls -lh {} \;
+          echo "=== Total repo size ==="
+          du -sh huggingface-space/
 
-if not hf_token or not space_id:
-    print('Missing HF_TOKEN or HF_SPACE_ID')
-    exit(1)
-
-api = HfApi(token=hf_token)
-
-# Upload files via API (handles binary files like PNGs correctly)
-api.upload_folder(
-    repo_id=space_id,
-    repo_type='space',
-    folder_path='.',
-    ignore_patterns=[
-        '.git/**',
-        '.github/**',
-        'node_modules/**',
-        'huggingface-space/**',
-        '.gitignore',
-        'DEPLOYMENT_TROUBLESHOOTING.md',
-        'README.md',
-    ],
-    path_in_repo='.',
-)
-
-print(f'Successfully deployed to https://huggingface.co/spaces/{space_id}')
-"
+      - name: Commit and Push to Hugging Face Space
+        run: |
+          cd huggingface-space
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          
+          # Track PNGs with LFS (will handle existing files correctly)
+          git lfs track "*.png"
+          git add .gitattributes
+          
+          # Add all changes
+          git add -A
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to deploy"
+          else
+            git commit -m "Deploy from GitHub Actions - $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git push https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} main 2>&1
+            echo "Successfully deployed to https://huggingface.co/spaces/${HF_SPACE_ID}"
+          fi
