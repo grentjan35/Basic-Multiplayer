@@ -122,8 +122,12 @@
         const inputs = {
             left: false,
             right: false,
-            jump: false
+            jump: false,
+            attack: false
         };
+
+        // Cooldown to prevent attack from re-triggering every tick while held
+        let attackInputSent = false;
 
         // Hitbox visualization (toggled with Shift+H)
         // Set HITBOX_TOGGLE_ENABLED to false to disable the Shift+H hotkey
@@ -237,12 +241,23 @@
                     lastFrameTime: Date.now(),
                     facingRight: true,
                     landingEndTime: 0,
-                    hitEndTime: 0
+                    hitEndTime: 0,
+                    attackEndTime: 0,
+                    attackAnimation: ''
                 });
             }
             
             const anim = playerAnimations.get(playerId);
             const now = Date.now();
+            
+            // Use facingRight from server state
+            if (playerState.facingRight !== undefined) {
+                anim.facingRight = playerState.facingRight;
+            } else if (playerState.vx < -0.1) {
+                anim.facingRight = false;
+            } else if (playerState.vx > 0.1) {
+                anim.facingRight = true;
+            }
             
             // Check if player is in hit stun animation
             if (now < anim.hitEndTime) {
@@ -251,11 +266,11 @@
                 return;
             }
             
-            // Update facing direction based on velocity
-            if (playerState.vx < -0.1) {
-                anim.facingRight = false;
-            } else if (playerState.vx > 0.1) {
-                anim.facingRight = true;
+            // Check if player is doing an attack animation
+            if (now < anim.attackEndTime) {
+                anim.currentAnimation = anim.attackAnimation;
+                // Show attack frame for the duration
+                return;
             }
             
             // Check if we're in landing state
@@ -330,7 +345,9 @@
                     lastFrameTime: Date.now(),
                     facingRight: true,
                     landingEndTime: 0,
-                    hitEndTime: 0
+                    hitEndTime: 0,
+                    attackEndTime: 0,
+                    attackAnimation: ''
                 });
             }
             
@@ -338,11 +355,52 @@
             anim.landingEndTime = Date.now() + 200; // Show landing for 200ms
         }
 
+        // Trigger attack animation based on combo stage
+        function triggerAttackAnimation(playerId, comboStage) {
+            if (!playerAnimations.has(playerId)) {
+                playerAnimations.set(playerId, {
+                    currentAnimation: 'idle',
+                    frameIndex: 0,
+                    lastFrameTime: Date.now(),
+                    facingRight: true,
+                    landingEndTime: 0,
+                    hitEndTime: 0,
+                    attackEndTime: 0,
+                    attackAnimation: ''
+                });
+            }
+            
+            const anim = playerAnimations.get(playerId);
+            
+            // Map combo stage to attack animation frame
+            let frameName = '';
+            if (comboStage === 1) {
+                frameName = 'jab';
+            } else if (comboStage === 2) {
+                frameName = 'cross';
+            } else if (comboStage === 3) {
+                frameName = 'kick';
+            }
+            
+            anim.attackAnimation = frameName;
+            anim.attackEndTime = Date.now() + 300; // Show attack for 300ms
+            anim.currentAnimation = frameName;
+            anim.frameIndex = 0;
+        }
+
         // Get current frame for player, using their own character image
         function getCurrentPlayerFrame(playerId, characterImage) {
             const anim = playerAnimations.get(playerId);
             if (!anim || !spritesheetData) {
                 return null;
+            }
+            
+            // Check if we're showing an attack animation (jab, cross, kick)
+            if (anim.attackAnimation && Date.now() < anim.attackEndTime) {
+                const frame = spritesheetData.frames[anim.attackAnimation];
+                if (frame) {
+                    return getFrameCoordinates(anim.attackAnimation, characterImage);
+                }
             }
             
             const frames = spritesheetData.animations[anim.currentAnimation];
@@ -363,7 +421,12 @@
                 vy: state1.vy + (state2.vy - state1.vy) * alpha,
                 onGround: state2.onGround,
                 color: state1.color,
-                sprite: state1.sprite
+                sprite: state1.sprite,
+                health: state1.health,
+                maxHealth: state1.maxHealth,
+                comboStage: state1.comboStage,
+                attackActive: state1.attackActive,
+                facingRight: state1.facingRight
             };
         }
 
@@ -472,6 +535,10 @@
                         // Check if this new state has gotHit flag and trigger animation
                         const gotHit = player.gotHit === true;
                         
+                        // Check if this state has an active attack (for animation)
+                        const attackActive = player.attackActive === true;
+                        const comboStage = player.comboStage || 0;
+                        
                         states.push({
                             x: player.x,
                             y: player.y,
@@ -481,6 +548,11 @@
                             color: player.color,
                             sprite: player.sprite,
                             gotHit: gotHit,
+                            health: player.health,
+                            maxHealth: player.maxHealth,
+                            comboStage: comboStage,
+                            attackActive: attackActive,
+                            facingRight: player.facingRight,
                             timestamp: timestamp
                         });
                         
@@ -493,12 +565,19 @@
                                     lastFrameTime: Date.now(),
                                     facingRight: true,
                                     landingEndTime: 0,
-                                    hitEndTime: 0
+                                    hitEndTime: 0,
+                                    attackEndTime: 0,
+                                    attackAnimation: ''
                                 });
                             }
                             const anim = playerAnimations.get(player.id);
                             anim.hitEndTime = Date.now() + 300; // Show hit for 300ms
                             anim.facingRight = player.vx > -0.1; // Face the direction of momentum
+                        }
+                        
+                        // Trigger attack animation if attack is active
+                        if (attackActive && comboStage > 0) {
+                            triggerAttackAnimation(player.id, comboStage);
                         }
                         
                         // Keep only last 300ms of states (reduced for better memory management)
@@ -537,7 +616,12 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'input',
-                    inputs: inputs
+                    inputs: {
+                        left: inputs.left,
+                        right: inputs.right,
+                        jump: inputs.jump,
+                        attack: inputs.attack
+                    }
                 }));
             }
         }
@@ -553,10 +637,16 @@
                 case 'KeyD':
                     inputs.right = true;
                     break;
-                case 'Space':
                 case 'ArrowUp':
                 case 'KeyW':
                     inputs.jump = true;
+                    break;
+                case 'Space':
+                    // Space = attack, not jump
+                    if (!attackInputSent) {
+                        inputs.attack = true;
+                        attackInputSent = true;
+                    }
                     break;
             }
             sendInput();
@@ -572,10 +662,13 @@
                 case 'KeyD':
                     inputs.right = false;
                     break;
-                case 'Space':
                 case 'ArrowUp':
                 case 'KeyW':
                     inputs.jump = false;
+                    break;
+                case 'Space':
+                    inputs.attack = false;
+                    attackInputSent = false;
                     break;
                 case 'KeyH':
                     if (e.shiftKey && HITBOX_TOGGLE_ENABLED) {
@@ -604,6 +697,38 @@
             ctx.restore();
         }
 
+        // Draw health bar for a player
+        function drawHealthBar(player) {
+            const barWidth = 40;
+            const barHeight = 5;
+            const barX = player.x + 10; // Small right offset to center over visual sprite
+            const barY = player.y - 12; // Above the player
+            
+            const health = player.health !== undefined ? player.health : 100;
+            const maxHealth = player.maxHealth !== undefined ? player.maxHealth : 100;
+            const healthPercent = Math.max(0, health / maxHealth);
+            
+            // Background (dark)
+            ctx.fillStyle = '#333';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            
+            // Health fill - green to red based on percentage
+            const r = Math.round(255 * (1 - healthPercent));
+            const g = Math.round(255 * healthPercent);
+            ctx.fillStyle = `rgb(${r}, ${g}, 30)`;
+            ctx.fillRect(barX, barY, barWidth * healthPercent, barHeight);
+            
+            // Border
+            ctx.strokeStyle = '#555';
+            ctx.strokeRect(barX, barY, barWidth, barHeight);
+            
+            // Health text (small, above bar)
+            ctx.fillStyle = '#aaa';
+            ctx.font = '8px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.ceil(health)}/${maxHealth}`, barX + barWidth / 2, barY - 2);
+        }
+
         // Draw a single player with their character spritesheet
         function drawPlayer(player) {
             // Update animation for all players using server state
@@ -618,6 +743,9 @@
                     triggerLanding(player.id);
                 }
             }
+            
+            // Draw health bar above player
+            drawHealthBar(player);
             
             // Get the character's spritesheet image
             const spriteName = player.sprite || Object.keys(characterImages)[0];

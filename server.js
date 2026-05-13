@@ -20,8 +20,22 @@ const HITBOX_LEFT_INSET = 14; // Trim empty space on left side of sprite
 const HITBOX_RIGHT_INSET = 0; // Right side is already aligned
 const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET - HITBOX_RIGHT_INSET;
 
-// Hit detection threshold - relative speed above this triggers get_hit
-const HIT_THRESHOLD = 5;
+// Attack constants
+const ATTACK_TIMEOUT = 500; // ms before combo resets to jab
+const ATTACK_ACTIVE_TIME = 200; // ms the hitbox is active
+const ATTACK_HITBOX_EXTEND = 30; // px the hitbox extends in front of player
+const ATTACK_HITBOX_WIDTH = 30;
+const ATTACK_HITBOX_HEIGHT = 40; // height of attack hitbox (waist-to-head area)
+
+// Combo stages: [damage, knockbackForce, name]
+const COMBO_DATA = [
+    { damage: 10, knockback: 15, name: 'jab' },
+    { damage: 20, knockback: 25, name: 'cross' },
+    { damage: 35, knockback: 45, name: 'kick' }
+];
+
+// Health
+const MAX_HEALTH = 100;
 
 // World dimensions
 const WORLD_WIDTH = 5000;
@@ -191,14 +205,39 @@ class Player {
         this.onGround = false;
         this.color = this.generateDarkColor();
         this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
-        this.inputs = { left: false, right: false, jump: false };
+        this.inputs = { left: false, right: false, jump: false, attack: false };
         this.gotHit = false; // Tracks if player was hit this frame
+        
+        // Attack combo system
+        this.comboStage = 0; // 0=no attack, 1=jab, 2=cross, 3=kick
+        this.lastAttackTime = 0; // tick count when last attack was triggered
+        this.attackActive = false; // is attack hitbox currently active
+        this.attackEndTime = 0; // tick count when attack expires
+        this.facingRight = true; // which direction the player is facing
+        
+        // Health system
+        this.health = MAX_HEALTH;
+        this.invincibleTimer = 0; // ticks until invincibility wears off (brief post-hit)
     }
 
     // Generate dark, desaturated colors
     generateDarkColor() {
         const hue = Math.floor(Math.random() * 360);
         return `hsl(${hue}, 20%, 35%)`;
+    }
+    
+    // Respawn the player
+    respawn() {
+        this.health = MAX_HEALTH;
+        this.x = 100 + Math.random() * 500;
+        this.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+        this.vx = 0;
+        this.vy = 0;
+        this.onGround = false;
+        this.comboStage = 0;
+        this.attackActive = false;
+        this.invincibleTimer = 60; // ~2 seconds of invincibility
+        this.gotHit = false;
     }
 }
 
@@ -244,18 +283,46 @@ function applyPhysics(player) {
         player.vy = MAX_FALL_SPEED;
     }
     
-    // Apply input forces
+    // Apply input forces (only if not in attack animation lock)
     if (player.inputs.left) {
         player.vx -= MOVE_SPEED;
+        player.facingRight = false;
     }
     if (player.inputs.right) {
         player.vx += MOVE_SPEED;
+        player.facingRight = true;
     }
     if (player.inputs.jump && player.onGround) {
         // Scale jump force based on horizontal velocity
         const speedBonus = Math.abs(player.vx) * 0.5;
         player.vy = -(JUMP_FORCE + speedBonus);
         player.onGround = false;
+    }
+    
+    // Process attack input
+    if (player.inputs.attack) {
+        // Check combo timing
+        const now = Date.now();
+        if (now - player.lastAttackTime > ATTACK_TIMEOUT) {
+            // Too long since last attack, restart combo
+            player.comboStage = 1;
+        } else if (player.comboStage < 3) {
+            // Advance combo
+            player.comboStage++;
+        } else {
+            // Max combo (kick), restart
+            player.comboStage = 1;
+        }
+        
+        // Activate the attack hitbox
+        player.attackActive = true;
+        player.attackEndTime = now + ATTACK_ACTIVE_TIME;
+        player.lastAttackTime = now;
+    }
+    
+    // Deactivate attack if expired
+    if (player.attackActive && Date.now() > player.attackEndTime) {
+        player.attackActive = false;
     }
     
     // Apply friction when on ground
@@ -279,10 +346,7 @@ function applyPhysics(player) {
     
     // Reset if fallen off map
     if (player.y > WORLD_HEIGHT + 100) {
-        player.x = 100;
-        player.y = WORLD_HEIGHT - 200;
-        player.vx = 0;
-        player.vy = 0;
+        player.respawn();
     }
 }
 
@@ -335,10 +399,56 @@ function checkCollision(player) {
     }
 }
 
-// Check player-to-player collision - SERVER ONLY
+// Get the attack hitbox for a player (in front of them)
+function getAttackHitbox(player) {
+    if (!player.attackActive) return null;
+    
+    const stage = player.comboStage - 1; // 0-indexed
+    if (stage < 0 || stage >= COMBO_DATA.length) return null;
+    
+    const combo = COMBO_DATA[stage];
+    
+    // Attack hitbox extends in front of the player based on facing direction
+    let hitboxX, hitboxY;
+    
+    // Slight upward offset for the attack hitbox (waist-to-head area)
+    const yOffset = 10;
+    
+    if (player.facingRight) {
+        hitboxX = player.x + PLAYER_WIDTH; // right side of player
+    } else {
+        hitboxX = player.x - ATTACK_HITBOX_EXTEND; // left side of player
+    }
+    
+    hitboxY = player.y + yOffset;
+    
+    // Different attacks have different ranges
+    let extend = ATTACK_HITBOX_EXTEND;
+    if (combo.name === 'kick') {
+        extend = ATTACK_HITBOX_EXTEND * 1.5; // kick has more range
+    } else if (combo.name === 'cross') {
+        extend = ATTACK_HITBOX_EXTEND * 1.2;
+    }
+    
+    return {
+        x: player.facingRight ? hitboxX : hitboxX - ATTACK_HITBOX_WIDTH,
+        y: hitboxY,
+        w: player.facingRight ? extend : ATTACK_HITBOX_WIDTH + extend,
+        h: ATTACK_HITBOX_HEIGHT,
+        damage: combo.damage,
+        knockback: combo.knockback,
+        direction: player.facingRight ? 1 : -1,
+        stage: stage
+    };
+}
+
+// Check player-to-player collisions AND attack hits - SERVER ONLY
 function checkPlayerCollisions(currentPlayer) {
     const currHitboxLeft = currentPlayer.x + HITBOX_LEFT_INSET;
     const currHitboxRight = currHitboxLeft + HITBOX_WIDTH;
+    
+    // Get this player's attack hitbox
+    const attackHitbox = getAttackHitbox(currentPlayer);
     
     for (const [id, { player }] of players) {
         if (id === currentPlayer.id) continue;
@@ -346,6 +456,46 @@ function checkPlayerCollisions(currentPlayer) {
         const otherHitboxLeft = player.x + HITBOX_LEFT_INSET;
         const otherHitboxRight = otherHitboxLeft + HITBOX_WIDTH;
         
+        // --- ATTACK CHECK ---
+        // If current player has an active attack and the opponent is in range
+        if (attackHitbox && player.invincibleTimer <= 0) {
+            const opponentLeft = player.x;
+            const opponentRight = player.x + PLAYER_WIDTH;
+            const opponentTop = player.y;
+            const opponentBottom = player.y + PLAYER_HEIGHT;
+            
+            if (attackHitbox.x < opponentRight &&
+                attackHitbox.x + attackHitbox.w > opponentLeft &&
+                attackHitbox.y < opponentBottom &&
+                attackHitbox.y + attackHitbox.h > opponentTop) {
+                
+                // ---- HIT! ----
+                // Deal damage
+                player.health -= attackHitbox.damage;
+                
+                // Apply knockback with greater force
+                const knockbackForce = attackHitbox.knockback;
+                player.vx = attackHitbox.direction * knockbackForce;
+                player.vy = -knockbackForce * 0.6; // Launch upward too
+                player.onGround = false;
+                
+                // Mark as hit
+                player.gotHit = true;
+                
+                // Brief invincibility
+                player.invincibleTimer = 15; // ~0.5 seconds
+                
+                // Deactivate the attacker's hitbox (one hit per attack)
+                currentPlayer.attackActive = false;
+                
+                // Check if opponent should respawn
+                if (player.health <= 0) {
+                    player.respawn();
+                }
+            }
+        }
+        
+        // --- BODY COLLISION CHECK (push apart) ---
         // Check if players are colliding (using inset hitbox)
         if (currHitboxRight > otherHitboxLeft &&
             currHitboxLeft < otherHitboxRight &&
@@ -365,34 +515,6 @@ function checkPlayerCollisions(currentPlayer) {
             const relVx = currentPlayer.vx - player.vx;
             const relVy = currentPlayer.vy - player.vy;
             const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
-            
-            // Check if collision force is strong enough to trigger get_hit
-            // Only the player with LESS speed (the one receiving the impact) gets hit
-            if (relSpeed >= HIT_THRESHOLD) {
-                if (minOverlapY < minOverlapX) {
-                    // Vertical collision - compare vertical speeds
-                    if (Math.abs(currentPlayer.vy) > Math.abs(player.vy)) {
-                        player.gotHit = true; // other player is the victim
-                    } else if (Math.abs(player.vy) > Math.abs(currentPlayer.vy)) {
-                        currentPlayer.gotHit = true; // current player is the victim
-                    } else {
-                        // Equal speeds - both get hit
-                        currentPlayer.gotHit = true;
-                        player.gotHit = true;
-                    }
-                } else {
-                    // Horizontal collision - compare horizontal speeds
-                    if (Math.abs(currentPlayer.vx) > Math.abs(player.vx)) {
-                        player.gotHit = true; // other player is the victim
-                    } else if (Math.abs(player.vx) > Math.abs(currentPlayer.vx)) {
-                        currentPlayer.gotHit = true; // current player is the victim
-                    } else {
-                        // Equal speeds - both get hit
-                        currentPlayer.gotHit = true;
-                        player.gotHit = true;
-                    }
-                }
-            }
             
             if (minOverlapY < minOverlapX) {
                 if (overlapTop < overlapBottom) {
@@ -438,6 +560,10 @@ function gameLoop() {
     // Reset gotHit flags at the start of each frame
     for (const [id, { player }] of players) {
         player.gotHit = false;
+        // Decrease invincibility timer
+        if (player.invincibleTimer > 0) {
+            player.invincibleTimer--;
+        }
     }
     
     // Update all players
@@ -460,7 +586,12 @@ function gameLoop() {
                 onGround: player.onGround,
                 color: player.color,
                 sprite: player.sprite,
-                gotHit: player.gotHit
+                gotHit: player.gotHit,
+                health: player.health,
+                maxHealth: MAX_HEALTH,
+                comboStage: player.comboStage,
+                attackActive: player.attackActive,
+                facingRight: player.facingRight
             });
         }
         
