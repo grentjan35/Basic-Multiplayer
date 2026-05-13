@@ -32,6 +32,59 @@ const players = new Map();
 let platforms = [];
 let playerIdCounter = 0;
 
+// Preloaded assets (base64 encoded for secure transmission via WebSocket)
+let spritesheetData = null;
+const characterImages = {}; // character name -> base64 PNG data URL
+
+// Load and base64-encode all assets at startup
+function loadAssets() {
+    // Load spritesheet JSON
+    try {
+        const jsonPath = path.join(__dirname, 'assets', 'spritesheet.json');
+        spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+        console.log('Loaded spritesheet metadata');
+    } catch (err) {
+        console.error('Failed to load spritesheet.json:', err.message);
+        spritesheetData = null;
+    }
+
+    // Load and base64-encode all character PNGs
+    for (const character of CHARACTERS) {
+        try {
+            const filePath = path.join(__dirname, 'assets', `${character}.png`);
+            const fileData = fs.readFileSync(filePath);
+            const base64 = fileData.toString('base64');
+            characterImages[character] = `data:image/png;base64,${base64}`;
+            console.log(`Loaded and encoded: ${character}.png`);
+        } catch (err) {
+            console.error(`Failed to load ${character}.png:`, err.message);
+            // Fallback to base.png
+            try {
+                const fallbackPath = path.join(__dirname, 'assets', 'base.png');
+                const fileData = fs.readFileSync(fallbackPath);
+                const base64 = fileData.toString('base64');
+                characterImages[character] = `data:image/png;base64,${base64}`;
+            } catch (fallbackErr) {
+                console.error('Failed to load base.png as fallback:', fallbackErr.message);
+            }
+        }
+    }
+
+    // Also load base.png for fallback
+    if (!characterImages['base']) {
+        try {
+            const filePath = path.join(__dirname, 'assets', 'base.png');
+            const fileData = fs.readFileSync(filePath);
+            const base64 = fileData.toString('base64');
+            characterImages['base'] = `data:image/png;base64,${base64}`;
+        } catch (err) {
+            console.error('Failed to load base.png:', err.message);
+        }
+    }
+
+    console.log(`Loaded ${Object.keys(characterImages).length} character images via base64`);
+}
+
 // Initialize platforms - huge map
 function initPlatforms() {
     platforms = [];
@@ -112,39 +165,9 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(data);
         });
-    } else if (req.url === '/assets/spritesheet.json') {
-        fs.readFile(path.join(__dirname, 'assets', 'spritesheet.json'), (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading spritesheet.json');
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(data);
-        });
-    } else if (req.url === '/assets/base.png') {
-        fs.readFile(path.join(__dirname, 'assets', 'base.png'), (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading base.png');
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'image/png' });
-            res.end(data);
-        });
-    } else if (req.url.startsWith('/assets/') && req.url.endsWith('.png')) {
-        // Serve any character spritesheet
-        // Decode URL-encoded characters (e.g., %20 for spaces) for Linux compatibility
-        const filename = decodeURIComponent(path.basename(req.url));
-        fs.readFile(path.join(__dirname, 'assets', filename), (err, data) => {
-            if (err) {
-                res.writeHead(404);
-                res.end('Not found');
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'image/png' });
-            res.end(data);
-        });
+    } else if (req.url === '/favicon.ico') {
+        res.writeHead(204);
+        res.end();
     } else {
         res.writeHead(404);
         res.end('Not found');
@@ -182,14 +205,19 @@ function addPlayer(ws) {
     const player = new Player(id, 100, WORLD_HEIGHT - 100 - PLAYER_HEIGHT);
     players.set(id, { player, ws });
     
-    ws.send(JSON.stringify({
+    // Send init with all assets embedded as base64 data URLs (no HTTP requests needed)
+    const initMessage = {
         type: 'init',
         id: id,
         platforms: platforms,
         worldWidth: WORLD_WIDTH,
         worldHeight: WORLD_HEIGHT,
-        characters: CHARACTERS  // Send available characters to client
-    }));
+        characters: CHARACTERS,
+        spritesheetData: spritesheetData,
+        images: characterImages
+    };
+    
+    ws.send(JSON.stringify(initMessage));
     
     return id;
 }
@@ -454,6 +482,7 @@ wss.on('connection', (ws) => {
 });
 
 // Initialize and start server
+loadAssets();
 initPlatforms();
 server.listen(7860, () => {
     console.log(`Server running on http://localhost:7860`);

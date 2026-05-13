@@ -97,7 +97,7 @@
         let fadeAlpha = 1.0; // Start fully black
         let gameDataReceived = false;
 
-        // Called when game data OR spritesheets finish loading - waits for both
+        // Called when game data AND spritesheets finish loading - waits for both
         function checkLoadingComplete() {
             if (gameDataReceived && spritesheetLoaded && !loadingComplete) {
                 loadingComplete = true;
@@ -106,7 +106,7 @@
             }
         }
 
-        // Character spritesheet system - multiple spritesheets
+        // Character spritesheet system - loaded via WebSocket (no HTTP requests)
         let spritesheetData = null;
         let spritesheetLoaded = false;
         const characterImages = {}; // Map of character name -> Image
@@ -143,42 +143,60 @@
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
-        // Load spritesheet metadata and all character images
-        async function loadSpritesheets(characterList) {
+        // Load images from base64 data URLs received via WebSocket (no HTTP requests)
+        async function loadImagesFromData(characterList, imagesData) {
             try {
-                // Load JSON metadata
-                const jsonResponse = await fetch('/assets/spritesheet.json');
-                spritesheetData = await jsonResponse.json();
-                
-                // Load all character spritesheets in parallel
                 const loadPromises = characterList.map(character => {
-                    return new Promise((resolve, reject) => {
+                    return new Promise((resolve) => {
+                        const dataUrl = imagesData[character];
+                        if (!dataUrl) {
+                            console.warn(`No image data for ${character}, using fallback`);
+                            // Try fallback
+                            const fallbackUrl = imagesData['base'];
+                            if (fallbackUrl) {
+                                const img = new Image();
+                                img.onload = () => {
+                                    characterImages[character] = img;
+                                    resolve();
+                                };
+                                img.onerror = resolve;
+                                img.src = fallbackUrl;
+                            } else {
+                                resolve();
+                            }
+                            return;
+                        }
+                        
                         const img = new Image();
                         img.onload = () => {
                             characterImages[character] = img;
                             resolve();
                         };
-                        img.onerror = (err) => {
-                            console.error(`Failed to load spritesheet for ${character}:`, err);
-                            // Set fallback to base.png
-                            const fallbackImg = new Image();
-                            fallbackImg.onload = () => {
-                                characterImages[character] = fallbackImg;
+                        img.onerror = () => {
+                            console.error(`Failed to decode base64 image for ${character}`);
+                            // Try fallback
+                            const fallbackUrl = imagesData['base'];
+                            if (fallbackUrl) {
+                                const fallbackImg = new Image();
+                                fallbackImg.onload = () => {
+                                    characterImages[character] = fallbackImg;
+                                    resolve();
+                                };
+                                fallbackImg.onerror = resolve;
+                                fallbackImg.src = fallbackUrl;
+                            } else {
                                 resolve();
-                            };
-                            fallbackImg.onerror = resolve; // resolve anyway, we'll use fallback rendering
-                            fallbackImg.src = '/assets/base.png';
+                            }
                         };
-                        // URL-encode the filename to handle spaces properly
-                        img.src = `/assets/${encodeURIComponent(character)}.png`;
+                        img.src = dataUrl;
                     });
                 });
                 
                 await Promise.all(loadPromises);
                 spritesheetLoaded = true;
-                console.log(`Loaded ${characterList.length} character spritesheets:`, Object.keys(characterImages));
+                console.log(`Loaded ${characterList.length} character spritesheets from base64 data`);
             } catch (error) {
-                console.error('Failed to load spritesheets:', error);
+                console.error('Failed to load images from base64 data:', error);
                 spritesheetLoaded = true; // Still allow fade-in even if spritesheets fail
             }
         }
@@ -408,7 +426,7 @@
                 playerCount.textContent = 'Connected to server';
             };
             
-            ws.onmessage = (event) => {
+            ws.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
                 const timestamp = Date.now();
                 
@@ -417,12 +435,15 @@
                     platforms = data.platforms;
                     worldWidth = data.worldWidth;
                     worldHeight = data.worldHeight;
-                    // Load character spritesheets after receiving the list from server
-                    if (data.characters && !spritesheetLoaded) {
-                        loadSpritesheets(data.characters).then(() => {
-                            gameDataReceived = true;
-                            checkLoadingComplete();
-                        });
+                    
+                    // Load spritesheet data from WebSocket (not HTTP)
+                    spritesheetData = data.spritesheetData;
+                    
+                    // Load images from base64 data URLs (no HTTP requests - invisible in Dev Tools)
+                    if (data.images && data.characters && !spritesheetLoaded) {
+                        await loadImagesFromData(data.characters, data.images);
+                        gameDataReceived = true;
+                        checkLoadingComplete();
                     } else {
                         gameDataReceived = true;
                         checkLoadingComplete();
