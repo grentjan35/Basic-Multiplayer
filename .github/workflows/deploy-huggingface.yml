@@ -16,36 +16,45 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install Hugging Face CLI
+      - name: Install Hugging Face Hub
         run: |
-          pip install huggingface_hub[cli]
+          pip install huggingface_hub
 
-      - name: Debug variables
+      - name: Deploy to Hugging Face Space via API
         run: |
-          echo "HF_SPACE_ID=${HF_SPACE_ID}"
-          echo "HF_TOKEN length=${#HF_TOKEN}"
+          python -c "
+import os
+from huggingface_hub import HfApi
 
-      - name: Login to Hugging Face
-        run: |
-          echo $HF_TOKEN | hf auth login
+# Get credentials
+hf_token = os.environ.get('HF_TOKEN')
+space_id = os.environ.get('HF_SPACE_ID')
 
-      - name: Clone Hugging Face Space
-        run: |
-          git clone https://huggingface.co/spaces/${HF_SPACE_ID} huggingface-space
+if not hf_token or not space_id:
+    print('Missing HF_TOKEN or HF_SPACE_ID')
+    exit(1)
 
-      - name: Copy files to Space
-        run: |
-          rsync -av --exclude='huggingface-space' --exclude='.git' . huggingface-space/
-          cd huggingface-space
-          git add .
-          git config --global user.email "action@github.com"
-          git config --global user.name "GitHub Action"
-          git commit -m "Deploy from GitHub Actions"
+api = HfApi(token=hf_token)
 
-      - name: Push to Hugging Face Space
-        run: |
-          cd huggingface-space
-          git push https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_ID} main
+# Upload all files from current directory to the Space repo
+# This handles binary files (PNG, etc.) correctly via the API
+# It will delete files in the Space that are not in the local directory
+# Upload files via API (handles binary files like PNGs correctly)
+api.upload_folder(
+    repo_id=space_id,
+    repo_type='space',
+    folder_path='.',
+    ignore_patterns=[
+        '.git/**',
+        '.github/**',
+        'node_modules/**',
+        'huggingface-space/**',
+        '.gitignore',
+        'DEPLOYMENT_TROUBLESHOOTING.md',
+        'README.md',
+    ],
+    path_in_repo='.',
+)
+
+print(f'Successfully deployed to https://huggingface.co/spaces/{space_id}')
+"
