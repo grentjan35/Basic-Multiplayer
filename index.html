@@ -92,6 +92,20 @@
         let worldWidth = 0;
         let worldHeight = 0;
         
+        // Loading & fade system - black screen until everything is ready
+        let loadingComplete = false;
+        let fadeAlpha = 1.0; // Start fully black
+        let gameDataReceived = false;
+
+        // Called when game data OR spritesheets finish loading - waits for both
+        function checkLoadingComplete() {
+            if (gameDataReceived && spritesheetLoaded && !loadingComplete) {
+                loadingComplete = true;
+                console.log('Loading complete, starting fade-in');
+                // Fade will now start decreasing in the render loop
+            }
+        }
+
         // Character spritesheet system - multiple spritesheets
         let spritesheetData = null;
         let spritesheetLoaded = false;
@@ -157,6 +171,7 @@
                 console.log(`Loaded ${characterList.length} character spritesheets:`, Object.keys(characterImages));
             } catch (error) {
                 console.error('Failed to load spritesheets:', error);
+                spritesheetLoaded = true; // Still allow fade-in even if spritesheets fail
             }
         }
 
@@ -396,9 +411,20 @@
                     worldHeight = data.worldHeight;
                     // Load character spritesheets after receiving the list from server
                     if (data.characters && !spritesheetLoaded) {
-                        loadSpritesheets(data.characters);
+                        loadSpritesheets(data.characters).then(() => {
+                            gameDataReceived = true;
+                            checkLoadingComplete();
+                        });
+                    } else {
+                        gameDataReceived = true;
+                        checkLoadingComplete();
                     }
                 } else if (data.type === 'state') {
+                    // Mark game data as received on first state update
+                    if (!gameDataReceived && myPlayerId) {
+                        gameDataReceived = true;
+                        checkLoadingComplete();
+                    }
                     // Store state with timestamp for interpolation
                     for (const player of data.players) {
                         if (!playerStates.has(player.id)) {
@@ -590,6 +616,11 @@
                 frameCount = 0;
                 fpsUpdateTime = currentTime;
             }
+
+            // Fade out effect - transition from black to visible (only after loading is complete)
+            if (loadingComplete && fadeAlpha > 0) {
+                fadeAlpha = Math.max(0, fadeAlpha - 0.02);
+            }
             
             // Clear canvas
             ctx.fillStyle = '#0d0d0d';
@@ -642,6 +673,12 @@
             }
             
             ctx.restore();
+
+            // Draw black overlay during loading/fade
+            if (fadeAlpha > 0) {
+                ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
             
             // Render mini-map
             if (worldWidth > 0 && worldHeight > 0) {
@@ -706,6 +743,12 @@
             
             requestAnimationFrame(render);
         }
+
+        // Add an event listener to check for initial window load (assets can start loading early)
+        window.addEventListener('load', () => {
+            // Even if spritesheets aren't loaded yet, this ensures we're tracking state
+            console.log('Window fully loaded');
+        });
 
         // Initialize
         connect();

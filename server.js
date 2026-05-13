@@ -131,7 +131,8 @@ const server = http.createServer((req, res) => {
         });
     } else if (req.url.startsWith('/assets/') && req.url.endsWith('.png')) {
         // Serve any character spritesheet
-        const filename = path.basename(req.url);
+        // Decode URL-encoded characters (e.g., %20 for spaces) for Linux compatibility
+        const filename = decodeURIComponent(path.basename(req.url));
         fs.readFile(path.join(__dirname, 'assets', filename), (err, data) => {
             if (err) {
                 res.writeHead(404);
