@@ -613,16 +613,20 @@
                 }
             }
             
-            // Camera always centered on local player
-            let cameraX = 0;
-            let cameraY = 0;
-            if (localPlayer) {
-                cameraX = localPlayer.x - canvas.width / 2 + 20;
-                cameraY = localPlayer.y - canvas.height / 2 + 30;
-            }
+            // Camera zoom factor - higher values = more zoomed in
+            const CAMERA_ZOOM = 1.3;
             
             ctx.save();
-            ctx.translate(-cameraX, -cameraY);
+            
+            // Apply zoom centered on local player
+            if (localPlayer) {
+                // Translate to center of screen, scale up, then translate to player position
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.scale(CAMERA_ZOOM, CAMERA_ZOOM);
+                ctx.translate(-localPlayer.x, -localPlayer.y);
+            } else {
+                ctx.translate(0, 0);
+            }
             
             // Draw platforms
             ctx.fillStyle = '#2a2a2a';
