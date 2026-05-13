@@ -16,6 +16,9 @@ const JUMP_FORCE = 10;
 const MAX_FALL_SPEED = 12;
 const PLAYER_WIDTH = 40;
 const PLAYER_HEIGHT = 60;
+const HITBOX_LEFT_INSET = 14; // Trim empty space on left side of sprite
+const HITBOX_RIGHT_INSET = 0; // Right side is already aligned
+const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET - HITBOX_RIGHT_INSET;
 
 // World dimensions
 const WORLD_WIDTH = 5000;
@@ -255,16 +258,19 @@ function applyPhysics(player) {
 function checkCollision(player) {
     player.onGround = false;
     
+    const hitboxLeft = player.x + HITBOX_LEFT_INSET;
+    const hitboxRight = hitboxLeft + HITBOX_WIDTH;
+    
     for (const plat of platforms) {
-        // Check if player is colliding with platform
-        if (player.x + PLAYER_WIDTH > plat.x &&
-            player.x < plat.x + plat.w &&
+        // Check if player is colliding with platform (using inset hitbox)
+        if (hitboxRight > plat.x &&
+            hitboxLeft < plat.x + plat.w &&
             player.y + PLAYER_HEIGHT > plat.y &&
             player.y < plat.y + plat.h) {
             
             // Determine collision side
-            const overlapLeft = (player.x + PLAYER_WIDTH) - plat.x;
-            const overlapRight = (plat.x + plat.w) - player.x;
+            const overlapLeft = hitboxRight - plat.x;
+            const overlapRight = (plat.x + plat.w) - hitboxLeft;
             const overlapTop = (player.y + PLAYER_HEIGHT) - plat.y;
             const overlapBottom = (plat.y + plat.h) - player.y;
             
@@ -285,11 +291,11 @@ function checkCollision(player) {
             } else {
                 if (overlapLeft < overlapRight) {
                     // Hitting from left
-                    player.x = plat.x - PLAYER_WIDTH;
+                    player.x = plat.x - PLAYER_WIDTH; // Push to full sprite width so visual aligns
                     player.vx = 0;
                 } else {
                     // Hitting from right
-                    player.x = plat.x + plat.w;
+                    player.x = plat.x + plat.w - HITBOX_LEFT_INSET; // Right side wall push
                     player.vx = 0;
                 }
             }
@@ -299,18 +305,24 @@ function checkCollision(player) {
 
 // Check player-to-player collision - SERVER ONLY
 function checkPlayerCollisions(currentPlayer) {
+    const currHitboxLeft = currentPlayer.x + HITBOX_LEFT_INSET;
+    const currHitboxRight = currHitboxLeft + HITBOX_WIDTH;
+    
     for (const [id, { player }] of players) {
         if (id === currentPlayer.id) continue;
         
-        // Check if players are colliding
-        if (currentPlayer.x + PLAYER_WIDTH > player.x &&
-            currentPlayer.x < player.x + PLAYER_WIDTH &&
+        const otherHitboxLeft = player.x + HITBOX_LEFT_INSET;
+        const otherHitboxRight = otherHitboxLeft + HITBOX_WIDTH;
+        
+        // Check if players are colliding (using inset hitbox)
+        if (currHitboxRight > otherHitboxLeft &&
+            currHitboxLeft < otherHitboxRight &&
             currentPlayer.y + PLAYER_HEIGHT > player.y &&
             currentPlayer.y < player.y + PLAYER_HEIGHT) {
             
             // Determine collision side
-            const overlapLeft = (currentPlayer.x + PLAYER_WIDTH) - player.x;
-            const overlapRight = (player.x + PLAYER_WIDTH) - currentPlayer.x;
+            const overlapLeft = currHitboxRight - otherHitboxLeft;
+            const overlapRight = otherHitboxRight - currHitboxLeft;
             const overlapTop = (currentPlayer.y + PLAYER_HEIGHT) - player.y;
             const overlapBottom = (player.y + PLAYER_HEIGHT) - currentPlayer.y;
             
@@ -325,14 +337,12 @@ function checkPlayerCollisions(currentPlayer) {
                 if (overlapTop < overlapBottom) {
                     // Current player on top
                     currentPlayer.y = player.y - PLAYER_HEIGHT;
-                    // Transfer momentum - push current player up, other player down
                     const pushForce = Math.abs(relVy) * 0.5;
                     currentPlayer.vy = Math.min(currentPlayer.vy, -pushForce);
                     player.vy = Math.max(player.vy, pushForce);
                 } else {
                     // Current player below
                     currentPlayer.y = player.y + PLAYER_HEIGHT;
-                    // Transfer momentum - push current player down, other player up
                     const pushForce = Math.abs(relVy) * 0.5;
                     currentPlayer.vy = Math.max(currentPlayer.vy, pushForce);
                     player.vy = Math.min(player.vy, -pushForce);
@@ -341,14 +351,12 @@ function checkPlayerCollisions(currentPlayer) {
                 if (overlapLeft < overlapRight) {
                     // Current player on left
                     currentPlayer.x = player.x - PLAYER_WIDTH;
-                    // Transfer momentum - push current player left, other player right
                     const pushForce = Math.abs(relVx) * 0.5;
                     currentPlayer.vx = Math.min(currentPlayer.vx, -pushForce);
                     player.vx = Math.max(player.vx, pushForce);
                 } else {
                     // Current player on right
                     currentPlayer.x = player.x + PLAYER_WIDTH;
-                    // Transfer momentum - push current player right, other player left
                     const pushForce = Math.abs(relVx) * 0.5;
                     currentPlayer.vx = Math.max(currentPlayer.vx, pushForce);
                     player.vx = Math.min(player.vx, -pushForce);

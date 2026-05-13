@@ -125,6 +125,14 @@
             jump: false
         };
 
+        // Hitbox visualization (toggled with Shift+H)
+        // Set HITBOX_TOGGLE_ENABLED to false to disable the Shift+H hotkey
+        const HITBOX_TOGGLE_ENABLED = false;
+        const HITBOX_LEFT_INSET = 14;
+        const HITBOX_RIGHT_INSET = 0;
+        const HITBOX_WIDTH = 40 - HITBOX_LEFT_INSET - HITBOX_RIGHT_INSET;
+        const HITBOX_HEIGHT = 60;
+        let showHitbox = false;
 
         // Resize canvas to full window
         function resizeCanvas() {
@@ -518,6 +526,11 @@
                 case 'KeyW':
                     inputs.jump = false;
                     break;
+                case 'KeyH':
+                    if (e.shiftKey && HITBOX_TOGGLE_ENABLED) {
+                        showHitbox = !showHitbox;
+                    }
+                    break;
             }
             sendInput();
         });
@@ -526,6 +539,19 @@
         let lastFrameTime = performance.now();
         let frameCount = 0;
         let fpsUpdateTime = 0;
+
+        // Draw hitbox outline for a player (dotted rectangle showing collision area)
+        function drawHitbox(player) {
+            const hx = player.x + HITBOX_LEFT_INSET;
+            const hy = player.y;
+            
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = 'rgba(255, 255, 100, 0.8)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(hx, hy, HITBOX_WIDTH, HITBOX_HEIGHT);
+            ctx.restore();
+        }
 
         // Draw a single player with their character spritesheet
         function drawPlayer(player) {
@@ -670,6 +696,13 @@
             // Draw players with interpolation
             for (const player of interpolatedPlayers) {
                 drawPlayer(player);
+            }
+            
+            // Draw hitboxes on top if toggled on (Shift+H)
+            if (showHitbox) {
+                for (const player of interpolatedPlayers) {
+                    drawHitbox(player);
+                }
             }
             
             ctx.restore();
