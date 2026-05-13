@@ -92,9 +92,17 @@
         let worldWidth = 0;
         let worldHeight = 0;
         
+        // Character spritesheet system - multiple spritesheets
+        let spritesheetData = null;
+        let spritesheetLoaded = false;
+        const characterImages = {}; // Map of character name -> Image
+        
         // Interpolation system - now mutable for real-time adjustment
         let INTERPOLATION_DELAY = 75; // ms (optimized for high-end networks, can scale up to 200ms+ for bad networks)
         const playerStates = new Map(); // Store past states for interpolation
+        
+        // Animation state management
+        const playerAnimations = new Map(); // Store current animation state for each player
         
         // Input state - only for sending to server
         const inputs = {
@@ -113,12 +121,199 @@
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
+        // Load spritesheet metadata and all character images
+        async function loadSpritesheets(characterList) {
+            try {
+                // Load JSON metadata
+                const jsonResponse = await fetch('/assets/spritesheet.json');
+                spritesheetData = await jsonResponse.json();
+                
+                // Load all character spritesheets in parallel
+                const loadPromises = characterList.map(character => {
+                    return new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            characterImages[character] = img;
+                            resolve();
+                        };
+                        img.onerror = (err) => {
+                            console.error(`Failed to load spritesheet for ${character}:`, err);
+                            // Set fallback to base.png
+                            const fallbackImg = new Image();
+                            fallbackImg.onload = () => {
+                                characterImages[character] = fallbackImg;
+                                resolve();
+                            };
+                            fallbackImg.onerror = resolve; // resolve anyway, we'll use fallback rendering
+                            fallbackImg.src = '/assets/base.png';
+                        };
+                        // URL-encode the filename to handle spaces properly
+                        img.src = `/assets/${encodeURIComponent(character)}.png`;
+                    });
+                });
+                
+                await Promise.all(loadPromises);
+                spritesheetLoaded = true;
+                console.log(`Loaded ${characterList.length} character spritesheets:`, Object.keys(characterImages));
+            } catch (error) {
+                console.error('Failed to load spritesheets:', error);
+            }
+        }
+
+        // Get frame coordinates from spritesheet using the character's own image
+        function getFrameCoordinates(frameName, characterImage) {
+            if (!spritesheetData || !spritesheetData.frames[frameName]) {
+                return null;
+            }
+            
+            const frame = spritesheetData.frames[frameName];
+            const gridInfo = spritesheetData.spreadsheet_info.grid.split('x');
+            const gridCols = parseInt(gridInfo[0]);
+            const gridRows = parseInt(gridInfo[1]);
+            
+            // Use the provided character image (not a generic one) to calculate frame dimensions
+            const img = characterImage || Object.values(characterImages)[0];
+            if (!img) return null;
+            
+            const frameWidth = img.width / gridCols;
+            const frameHeight = img.height / gridRows;
+            
+            return {
+                x: frame.col * frameWidth,
+                y: frame.row * frameHeight,
+                width: frameWidth,
+                height: frameHeight,
+                scale: frame.scale || 1.0 // Per-frame scale factor for oversized sprites
+            };
+        }
+
+        // Update player animation based on server state and input
+        function updatePlayerAnimation(playerId, playerState) {
+            if (!playerAnimations.has(playerId)) {
+                playerAnimations.set(playerId, {
+                    currentAnimation: 'idle',
+                    frameIndex: 0,
+                    lastFrameTime: Date.now(),
+                    facingRight: true,
+                    landingEndTime: 0
+                });
+            }
+            
+            const anim = playerAnimations.get(playerId);
+            const now = Date.now();
+            
+            // Update facing direction based on velocity
+            if (playerState.vx < -0.1) {
+                anim.facingRight = false;
+            } else if (playerState.vx > 0.1) {
+                anim.facingRight = true;
+            }
+            
+            // Check if we're in landing state
+            if (now < anim.landingEndTime) {
+                anim.currentAnimation = 'jump';
+                anim.frameIndex = 2; // landing frame
+                return;
+            }
+            
+            // Determine animation based on server state
+            let targetAnimation = 'idle';
+            
+            if (!playerState.onGround) {
+                // Check if actually falling downward vs going up
+                if (playerState.vy > 0) {
+                    // Falling downward - use falling pose
+                    targetAnimation = 'falling';
+                    anim.frameIndex = 0;
+                } else {
+                    // Going up or at peak - use mid-air pose
+                    targetAnimation = 'jump';
+                    anim.frameIndex = 1; // in_air frame
+                }
+                anim.currentAnimation = targetAnimation;
+                return;
+            } else {
+                // On ground
+                const speed = Math.abs(playerState.vx);
+                if (speed > 0.5) {
+                    targetAnimation = 'run';
+                } else {
+                    targetAnimation = 'idle';
+                }
+            }
+            
+            // Reset animation if changed
+            if (anim.currentAnimation !== targetAnimation) {
+                anim.currentAnimation = targetAnimation;
+                anim.frameIndex = 0;
+                anim.lastFrameTime = now;
+            }
+            
+            // Update frame based on animation speed and momentum
+            if (targetAnimation === 'run') {
+                const speed = Math.abs(playerState.vx);
+                const animationSpeed = Math.max(80, 250 - speed * 15); // Balanced speed
+                if (now - anim.lastFrameTime > animationSpeed) {
+                    const frames = spritesheetData.animations[targetAnimation];
+                    if (frames) {
+                        anim.frameIndex = (anim.frameIndex + 1) % frames.length;
+                        anim.lastFrameTime = now;
+                    }
+                }
+            } else {
+                const animationSpeed = 200; // ms per frame for idle
+                if (now - anim.lastFrameTime > animationSpeed) {
+                    const frames = spritesheetData.animations[targetAnimation];
+                    if (frames) {
+                        anim.frameIndex = (anim.frameIndex + 1) % frames.length;
+                        anim.lastFrameTime = now;
+                    }
+                }
+            }
+        }
+
+        // Trigger landing animation
+        function triggerLanding(playerId) {
+            if (!playerAnimations.has(playerId)) {
+                playerAnimations.set(playerId, {
+                    currentAnimation: 'idle',
+                    frameIndex: 0,
+                    lastFrameTime: Date.now(),
+                    facingRight: true,
+                    landingEndTime: 0
+                });
+            }
+            
+            const anim = playerAnimations.get(playerId);
+            anim.landingEndTime = Date.now() + 200; // Show landing for 200ms
+        }
+
+        // Get current frame for player, using their own character image
+        function getCurrentPlayerFrame(playerId, characterImage) {
+            const anim = playerAnimations.get(playerId);
+            if (!anim || !spritesheetData) {
+                return null;
+            }
+            
+            const frames = spritesheetData.animations[anim.currentAnimation];
+            if (!frames || frames.length === 0) {
+                return null;
+            }
+            
+            const frameName = frames[anim.frameIndex];
+            return getFrameCoordinates(frameName, characterImage);
+        }
+
         // Interpolate between two states
         function interpolateState(state1, state2, alpha) {
             return {
                 x: state1.x + (state2.x - state1.x) * alpha,
                 y: state1.y + (state2.y - state1.y) * alpha,
-                color: state1.color
+                vx: state1.vx + (state2.vx - state1.vx) * alpha,
+                vy: state1.vy + (state2.vy - state1.vy) * alpha,
+                onGround: state2.onGround,
+                color: state1.color,
+                sprite: state1.sprite
             };
         }
 
@@ -169,9 +364,6 @@
             const wsUrl = `${wsProtocol}//${wsHost}`;
             
             console.log('Connecting to WebSocket at:', wsUrl);
-            console.log('Current hostname:', window.location.hostname);
-            console.log('Current host:', window.location.host);
-            console.log('Protocol:', window.location.protocol);
             
             // Close existing connection if any
             if (ws && ws.readyState !== WebSocket.CLOSED) {
@@ -202,6 +394,10 @@
                     platforms = data.platforms;
                     worldWidth = data.worldWidth;
                     worldHeight = data.worldHeight;
+                    // Load character spritesheets after receiving the list from server
+                    if (data.characters && !spritesheetLoaded) {
+                        loadSpritesheets(data.characters);
+                    }
                 } else if (data.type === 'state') {
                     // Store state with timestamp for interpolation
                     for (const player of data.players) {
@@ -212,7 +408,11 @@
                         states.push({
                             x: player.x,
                             y: player.y,
+                            vx: player.vx,
+                            vy: player.vy,
+                            onGround: player.onGround,
                             color: player.color,
+                            sprite: player.sprite,
                             timestamp: timestamp
                         });
                         
@@ -301,6 +501,81 @@
         let frameCount = 0;
         let fpsUpdateTime = 0;
 
+        // Draw a single player with their character spritesheet
+        function drawPlayer(player) {
+            // Update animation for all players using server state
+            updatePlayerAnimation(player.id, player);
+            
+            // Check for landing (transition from air to ground)
+            const prevStates = playerStates.get(player.id);
+            if (prevStates && prevStates.length >= 2) {
+                const prevState = prevStates[prevStates.length - 2];
+                const currState = prevStates[prevStates.length - 1];
+                if (!prevState.onGround && currState.onGround) {
+                    triggerLanding(player.id);
+                }
+            }
+            
+            // Get the character's spritesheet image
+            const spriteName = player.sprite || Object.keys(characterImages)[0];
+            const characterImage = characterImages[spriteName];
+            
+            // Draw sprite if loaded, otherwise fallback to rectangle
+            if (spritesheetLoaded && characterImage) {
+                const frame = getCurrentPlayerFrame(player.id, characterImage);
+                const anim = playerAnimations.get(player.id);
+                
+                if (frame && anim) {
+                    // Scale proportionally to a consistent height of 60px
+                    // No cropping — preserves aspect ratio for any image size
+                    const targetHeight = 60;
+                    const frameScaleFactor = frame.scale || 1.0; // Per-frame scale for oversized sprites
+                    const scale = (targetHeight / frame.height) * frameScaleFactor;
+                    const drawWidth = Math.round(frame.width * scale);
+                    const drawHeight = Math.round(frame.height * scale);
+                    
+                    // Center the sprite if a per-frame scale is applied (so it shrinks from center, not top-left)
+                    const normalWidth = Math.round(frame.width * (targetHeight / frame.height));
+                    const normalHeight = targetHeight;
+                    const offsetX = Math.round((normalWidth - drawWidth) / 2);
+                    const offsetY = Math.round((normalHeight - drawHeight) / 2);
+                    
+                    ctx.save();
+                    
+                    // Flip sprite if facing left
+                    if (!anim.facingRight) {
+                        ctx.translate(player.x + drawWidth + offsetX, player.y + offsetY);
+                        ctx.scale(-1, 1);
+                        ctx.drawImage(
+                            characterImage,
+                            frame.x, frame.y, frame.width, frame.height,
+                            0, 0, drawWidth, drawHeight
+                        );
+                    } else {
+                        ctx.drawImage(
+                            characterImage,
+                            frame.x, frame.y, frame.width, frame.height,
+                            player.x + offsetX, player.y + offsetY, drawWidth, drawHeight
+                        );
+                    }
+                    
+                    ctx.restore();
+                } else {
+                    // Fallback to rectangle if frame not found
+                    ctx.fillStyle = player.color;
+                    ctx.fillRect(player.x, player.y, 40, 60);
+                    ctx.strokeStyle = '#444';
+                    ctx.strokeRect(player.x, player.y, 40, 60);
+                }
+            } else {
+                // Fallback to rectangle if spritesheet not loaded
+                ctx.fillStyle = player.color;
+                ctx.fillRect(player.x, player.y, 40, 60);
+                ctx.strokeStyle = '#444';
+                ctx.strokeRect(player.x, player.y, 40, 60);
+            }
+        }
+
         // Render function - CLIENT ONLY, no physics
         function render() {
             const currentTime = performance.now();
@@ -342,8 +617,8 @@
             let cameraX = 0;
             let cameraY = 0;
             if (localPlayer) {
-                cameraX = localPlayer.x - canvas.width / 2 + 16;
-                cameraY = localPlayer.y - canvas.height / 2 + 24;
+                cameraX = localPlayer.x - canvas.width / 2 + 20;
+                cameraY = localPlayer.y - canvas.height / 2 + 30;
             }
             
             ctx.save();
@@ -359,12 +634,7 @@
             
             // Draw players with interpolation
             for (const player of interpolatedPlayers) {
-                ctx.fillStyle = player.color;
-                ctx.fillRect(player.x, player.y, 32, 48);
-                
-                // Draw border
-                ctx.strokeStyle = '#444';
-                ctx.strokeRect(player.x, player.y, 32, 48);
+                drawPlayer(player);
             }
             
             ctx.restore();

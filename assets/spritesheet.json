@@ -1,0 +1,35 @@
+{
+  "spreadsheet_info": {
+    "grid": "4x4",
+    "total_frames": 16,
+    "description": "Character action set"
+  },
+  "frames": {
+    "idle_01": { "row": 0, "col": 0, "desc": "Idle Frame 1" },
+    "idle_02": { "row": 0, "col": 1, "desc": "Idle Frame 2" },
+    "idle_03": { "row": 0, "col": 2, "desc": "Idle Frame 3" },
+    
+    "get_hit": { "row": 0, "col": 3, "desc": "Hit Stun" },
+    "falling": { "row": 1, "col": 3, "desc": "Falling/Airborne", "scale": 0.85 },
+    "dead":    { "row": 2, "col": 3, "desc": "Death State" },
+
+    "run_01":  { "row": 1, "col": 0, "desc": "Run Cycle 1" },
+    "run_02":  { "row": 1, "col": 1, "desc": "Run Cycle 2" },
+    "run_03":  { "row": 1, "col": 2, "desc": "Run Cycle 3" },
+
+    "jab":     { "row": 2, "col": 0, "desc": "Jab Punch" },
+    "cross":   { "row": 2, "col": 1, "desc": "Cross Punch" },
+    "kick":    { "row": 2, "col": 2, "desc": "Kick Attack" },
+
+    "jump_prep": { "row": 3, "col": 0, "desc": "Crouch/Ready to Jump" },
+    "in_air":    { "row": 3, "col": 1, "desc": "Mid-air Pose" },
+    "landing":   { "row": 3, "col": 2, "desc": "Hit Ground" }
+  },
+  "animations": {
+    "idle": ["idle_01", "idle_02", "idle_03"],
+    "run":  ["run_01", "run_02", "run_03"],
+    "jump": ["jump_prep", "in_air", "landing"],
+    "falling": ["falling"],
+    "death": ["get_hit", "falling", "dead"]
+  }
+}

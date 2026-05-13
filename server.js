@@ -14,12 +14,15 @@ const AIR_RESISTANCE = 0.98;
 const MOVE_SPEED = 0.5;
 const JUMP_FORCE = 10;
 const MAX_FALL_SPEED = 12;
-const PLAYER_WIDTH = 32;
-const PLAYER_HEIGHT = 48;
+const PLAYER_WIDTH = 40;
+const PLAYER_HEIGHT = 60;
 
 // World dimensions
 const WORLD_WIDTH = 5000;
 const WORLD_HEIGHT = 2000;
+
+// Available character spritesheets
+const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug'];
 
 // Game state - SERVER ONLY
 const players = new Map();
@@ -33,9 +36,9 @@ function initPlatforms() {
     // Ground floor across entire world
     platforms.push({ x: 0, y: WORLD_HEIGHT - 100, w: WORLD_WIDTH, h: 100 });
     
-    // Add low platforms touching ground for accessibility
+    // Add low platforms above ground with spacing
     for (let x = 200; x < WORLD_WIDTH; x += 500) {
-        platforms.push({ x, y: WORLD_HEIGHT - 150, w: 150, h: 20 });
+        platforms.push({ x, y: WORLD_HEIGHT - 180, w: 150, h: 20 });
     }
     
     // Generate random platforms with spacing
@@ -48,7 +51,7 @@ function initPlatforms() {
         // Check for overlap with existing platforms
         let overlaps = false;
         for (const plat of platforms) {
-            const buffer = 100; // Increased spacing
+            const buffer = 150; // Increased spacing to prevent touching
             if (x < plat.x + plat.w + buffer &&
                 x + w > plat.x - buffer &&
                 y < plat.y + plat.h + buffer &&
@@ -63,10 +66,28 @@ function initPlatforms() {
         }
     }
     
-    // Add some structured platforms for navigation with increased spacing
+    // Add structured platforms for navigation with spacing and overlap checking
     for (let x = 100; x < WORLD_WIDTH; x += 500) {
-        for (let y = 300; y < WORLD_HEIGHT - 200; y += 300) {
-            platforms.push({ x, y, w: 150, h: 20 });
+        for (let y = 300; y < WORLD_HEIGHT - 200; y += 350) { // Increased vertical spacing
+            const w = 150;
+            const h = 20;
+            
+            // Check for overlap with existing platforms
+            let overlaps = false;
+            for (const plat of platforms) {
+                const buffer = 100; // Buffer zone
+                if (x < plat.x + plat.w + buffer &&
+                    x + w > plat.x - buffer &&
+                    y < plat.y + plat.h + buffer &&
+                    y + h > plat.y - buffer) {
+                    overlaps = true;
+                    break;
+                }
+            }
+            
+            if (!overlaps) {
+                platforms.push({ x, y, w, h });
+            }
         }
     }
 }
@@ -88,6 +109,38 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(data);
         });
+    } else if (req.url === '/assets/spritesheet.json') {
+        fs.readFile(path.join(__dirname, 'assets', 'spritesheet.json'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Error loading spritesheet.json');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(data);
+        });
+    } else if (req.url === '/assets/base.png') {
+        fs.readFile(path.join(__dirname, 'assets', 'base.png'), (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Error loading base.png');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'image/png' });
+            res.end(data);
+        });
+    } else if (req.url.startsWith('/assets/') && req.url.endsWith('.png')) {
+        // Serve any character spritesheet
+        const filename = path.basename(req.url);
+        fs.readFile(path.join(__dirname, 'assets', filename), (err, data) => {
+            if (err) {
+                res.writeHead(404);
+                res.end('Not found');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'image/png' });
+            res.end(data);
+        });
     } else {
         res.writeHead(404);
         res.end('Not found');
@@ -107,6 +160,7 @@ class Player {
         this.vy = 0;
         this.onGround = false;
         this.color = this.generateDarkColor();
+        this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
         this.inputs = { left: false, right: false, jump: false };
     }
 
@@ -129,7 +183,8 @@ function addPlayer(ws) {
         id: id,
         platforms: platforms,
         worldWidth: WORLD_WIDTH,
-        worldHeight: WORLD_HEIGHT
+        worldHeight: WORLD_HEIGHT,
+        characters: CHARACTERS  // Send available characters to client
     }));
     
     return id;
@@ -325,7 +380,11 @@ function gameLoop() {
                 id: id,
                 x: Math.round(player.x * 100) / 100, // Round to reduce precision
                 y: Math.round(player.y * 100) / 100, // Round to reduce precision
-                color: player.color
+                vx: Math.round(player.vx * 100) / 100, // Include velocity for animation
+                vy: Math.round(player.vy * 100) / 100,
+                onGround: player.onGround,
+                color: player.color,
+                sprite: player.sprite
             });
         }
         
