@@ -36,9 +36,6 @@ if not hf_token or not space_id:
 
 api = HfApi(token=hf_token)
 
-# Upload all files from current directory to the Space repo
-# This handles binary files (PNG, etc.) correctly via the API
-# It will delete files in the Space that are not in the local directory
 # Upload files via API (handles binary files like PNGs correctly)
 api.upload_folder(
     repo_id=space_id,
