@@ -222,6 +222,9 @@ class Player {
         // Health system
         this.health = MAX_HEALTH;
         this.invincibleTimer = 0; // ticks until invincibility wears off (brief post-hit)
+        
+        // Fast-fall acceleration tracking
+        this.fastFallTicks = 0; // number of consecutive ticks holding down while airborne
     }
 
     // Generate dark, desaturated colors
@@ -303,8 +306,15 @@ function applyPhysics(player) {
         player.onGround = false;
     }
     // Fast-fall: hold down (S/ArrowDown) to fall faster
+    // Accelerates the longer down is held while airborne
     if (player.inputs.down && !player.onGround) {
-        player.vy += 1.5; // Extra downward acceleration per tick
+        player.fastFallTicks++;
+        // Progressive acceleration: starts at 1.5, increases by 0.25 per tick held (max 15)
+        const extraFall = Math.min(1.5 + player.fastFallTicks * 0.25, 15);
+        player.vy += extraFall;
+    } else {
+        // Reset fast-fall tracking when down is released or player lands
+        player.fastFallTicks = 0;
     }
     
     // Process attack input (only once per press, not every tick while held)
