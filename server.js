@@ -27,6 +27,9 @@ const ATTACK_HITBOX_EXTEND = 30; // px the hitbox extends in front of player
 const ATTACK_HITBOX_WIDTH = 30;
 const ATTACK_HITBOX_HEIGHT = 40; // height of attack hitbox (waist-to-head area)
 
+// Hit stun duration (frames)
+const HIT_STUN_FRAMES = 10; // ~333ms at 30 TPS
+
 // Combo stages: [damage, knockbackForce, name]
 // Sequence: jab → cross → jab → cross → kick (5 presses total)
 const COMBO_DATA = [
@@ -223,6 +226,9 @@ class Player {
         this.health = MAX_HEALTH;
         this.invincibleTimer = 0; // ticks until invincibility wears off (brief post-hit)
         
+        // Hit stun - lasts multiple frames so client doesn't miss the animation
+        this.hitStunTimer = 0; // ticks remaining for hit stun animation
+        
         // Fast-fall acceleration tracking
         this.fastFallTicks = 0; // number of consecutive ticks holding down while airborne
     }
@@ -245,6 +251,7 @@ class Player {
         this.attackActive = false;
         this.invincibleTimer = 60; // ~2 seconds of invincibility
         this.gotHit = false;
+        this.hitStunTimer = 0;
     }
 }
 
@@ -423,6 +430,70 @@ function checkCollision(player) {
     }
 }
 
+// Determine if two players are near each other (for body collision check)
+function playersAreColliding(a, b) {
+    const aLeft = a.x + HITBOX_LEFT_INSET;
+    const aRight = aLeft + HITBOX_WIDTH;
+    const bLeft = b.x + HITBOX_LEFT_INSET;
+    const bRight = bLeft + HITBOX_WIDTH;
+    
+    return aRight > bLeft &&
+           aLeft < bRight &&
+           a.y + PLAYER_HEIGHT > b.y &&
+           a.y < b.y + PLAYER_HEIGHT;
+}
+
+// Separate players that are overlapping (push apart)
+function resolvePlayerBodyCollision(a, b) {
+    const aLeft = a.x + HITBOX_LEFT_INSET;
+    const aRight = aLeft + HITBOX_WIDTH;
+    const bLeft = b.x + HITBOX_LEFT_INSET;
+    const bRight = bLeft + HITBOX_WIDTH;
+    
+    // Determine collision side
+    const overlapLeft = aRight - bLeft;
+    const overlapRight = bRight - aLeft;
+    const overlapTop = (a.y + PLAYER_HEIGHT) - b.y;
+    const overlapBottom = (b.y + PLAYER_HEIGHT) - a.y;
+    
+    const minOverlapX = Math.min(overlapLeft, overlapRight);
+    const minOverlapY = Math.min(overlapTop, overlapBottom);
+    
+    // Calculate relative velocity for momentum transfer
+    const relVx = a.vx - b.vx;
+    const relVy = a.vy - b.vy;
+    
+    if (minOverlapY < minOverlapX) {
+        if (overlapTop < overlapBottom) {
+            // a on top
+            a.y = b.y - PLAYER_HEIGHT;
+            const pushForce = Math.abs(relVy) * 0.5;
+            a.vy = Math.min(a.vy, -pushForce);
+            b.vy = Math.max(b.vy, pushForce);
+        } else {
+            // a below
+            a.y = b.y + PLAYER_HEIGHT;
+            const pushForce = Math.abs(relVy) * 0.5;
+            a.vy = Math.max(a.vy, pushForce);
+            b.vy = Math.min(b.vy, -pushForce);
+        }
+    } else {
+        if (overlapLeft < overlapRight) {
+            // a on left
+            a.x = b.x - PLAYER_WIDTH;
+            const pushForce = Math.abs(relVx) * 0.5;
+            a.vx = Math.min(a.vx, -pushForce);
+            b.vx = Math.max(b.vx, pushForce);
+        } else {
+            // a on right
+            a.x = b.x + PLAYER_WIDTH;
+            const pushForce = Math.abs(relVx) * 0.5;
+            a.vx = Math.max(a.vx, pushForce);
+            b.vx = Math.min(b.vx, -pushForce);
+        }
+    }
+}
+
 // Get the attack hitbox for a player (in front of them)
 function getAttackHitbox(player) {
     if (!player.attackActive) return null;
@@ -469,6 +540,39 @@ function getAttackHitbox(player) {
     };
 }
 
+// Check if an attack hitbox overlaps a player's body
+function attackHitsPlayer(attackHitbox, player) {
+    const opponentLeft = player.x;
+    const opponentRight = player.x + PLAYER_WIDTH;
+    const opponentTop = player.y;
+    const opponentBottom = player.y + PLAYER_HEIGHT;
+    
+    return attackHitbox.x < opponentRight &&
+           attackHitbox.x + attackHitbox.w > opponentLeft &&
+           attackHitbox.y < opponentBottom &&
+           attackHitbox.y + attackHitbox.h > opponentTop;
+}
+
+// Apply damage and knockback from an attack
+function applyAttackHit(defender, attackHitbox) {
+    // Deal damage
+    defender.health -= attackHitbox.damage;
+    
+    // Apply knockback - kick sends opponents flying high
+    const knockbackForce = attackHitbox.knockback;
+    const verticalMultiplier = attackHitbox.stage === 4 ? 1.5 : 0.6; // Kick launches high (stage 4 = 5th combo press)
+    defender.vx = attackHitbox.direction * knockbackForce;
+    defender.vy = -knockbackForce * verticalMultiplier; // Launch upward
+    defender.onGround = false;
+    
+    // Mark as hit (multi-frame for client animation)
+    defender.gotHit = true;
+    defender.hitStunTimer = HIT_STUN_FRAMES;
+    
+    // Brief invincibility
+    defender.invincibleTimer = 15; // ~0.5 seconds
+}
+
 // Kick magnet: pull kick attackers toward the nearest opponent (lunge effect)
 function applyKickMagnet() {
     for (const [id, { player }] of players) {
@@ -498,114 +602,6 @@ function applyKickMagnet() {
     }
 }
 
-// Check player-to-player collisions AND attack hits - SERVER ONLY
-function checkPlayerCollisions(currentPlayer) {
-    const currHitboxLeft = currentPlayer.x + HITBOX_LEFT_INSET;
-    const currHitboxRight = currHitboxLeft + HITBOX_WIDTH;
-    
-    // Get this player's attack hitbox
-    const attackHitbox = getAttackHitbox(currentPlayer);
-    
-    for (const [id, { player }] of players) {
-        if (id === currentPlayer.id) continue;
-        
-        const otherHitboxLeft = player.x + HITBOX_LEFT_INSET;
-        const otherHitboxRight = otherHitboxLeft + HITBOX_WIDTH;
-        
-        // --- ATTACK CHECK ---
-        // If current player has an active attack and the opponent is in range
-        if (attackHitbox && player.invincibleTimer <= 0) {
-            const opponentLeft = player.x;
-            const opponentRight = player.x + PLAYER_WIDTH;
-            const opponentTop = player.y;
-            const opponentBottom = player.y + PLAYER_HEIGHT;
-            
-            if (attackHitbox.x < opponentRight &&
-                attackHitbox.x + attackHitbox.w > opponentLeft &&
-                attackHitbox.y < opponentBottom &&
-                attackHitbox.y + attackHitbox.h > opponentTop) {
-                
-                // ---- HIT! ----
-                // Deal damage
-                player.health -= attackHitbox.damage;
-                
-                // Apply knockback - kick sends opponents flying high
-                const knockbackForce = attackHitbox.knockback;
-                const verticalMultiplier = attackHitbox.stage === 4 ? 1.5 : 0.6; // Kick launches high (stage 4 = 5th combo press)
-                player.vx = attackHitbox.direction * knockbackForce;
-                player.vy = -knockbackForce * verticalMultiplier; // Launch upward
-                player.onGround = false;
-                
-                // Mark as hit
-                player.gotHit = true;
-                
-                // Brief invincibility
-                player.invincibleTimer = 15; // ~0.5 seconds
-                
-                // Deactivate the attacker's hitbox (one hit per attack)
-                currentPlayer.attackActive = false;
-                
-                // Check if opponent should respawn
-                if (player.health <= 0) {
-                    player.respawn();
-                }
-            }
-        }
-        
-        // --- BODY COLLISION CHECK (push apart) ---
-        // Check if players are colliding (using inset hitbox)
-        if (currHitboxRight > otherHitboxLeft &&
-            currHitboxLeft < otherHitboxRight &&
-            currentPlayer.y + PLAYER_HEIGHT > player.y &&
-            currentPlayer.y < player.y + PLAYER_HEIGHT) {
-            
-            // Determine collision side
-            const overlapLeft = currHitboxRight - otherHitboxLeft;
-            const overlapRight = otherHitboxRight - currHitboxLeft;
-            const overlapTop = (currentPlayer.y + PLAYER_HEIGHT) - player.y;
-            const overlapBottom = (player.y + PLAYER_HEIGHT) - currentPlayer.y;
-            
-            const minOverlapX = Math.min(overlapLeft, overlapRight);
-            const minOverlapY = Math.min(overlapTop, overlapBottom);
-            
-            // Calculate relative velocity for momentum transfer
-            const relVx = currentPlayer.vx - player.vx;
-            const relVy = currentPlayer.vy - player.vy;
-            const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
-            
-            if (minOverlapY < minOverlapX) {
-                if (overlapTop < overlapBottom) {
-                    // Current player on top
-                    currentPlayer.y = player.y - PLAYER_HEIGHT;
-                    const pushForce = Math.abs(relVy) * 0.5;
-                    currentPlayer.vy = Math.min(currentPlayer.vy, -pushForce);
-                    player.vy = Math.max(player.vy, pushForce);
-                } else {
-                    // Current player below
-                    currentPlayer.y = player.y + PLAYER_HEIGHT;
-                    const pushForce = Math.abs(relVy) * 0.5;
-                    currentPlayer.vy = Math.max(currentPlayer.vy, pushForce);
-                    player.vy = Math.min(player.vy, -pushForce);
-                }
-            } else {
-                if (overlapLeft < overlapRight) {
-                    // Current player on left
-                    currentPlayer.x = player.x - PLAYER_WIDTH;
-                    const pushForce = Math.abs(relVx) * 0.5;
-                    currentPlayer.vx = Math.min(currentPlayer.vx, -pushForce);
-                    player.vx = Math.max(player.vx, pushForce);
-                } else {
-                    // Current player on right
-                    currentPlayer.x = player.x + PLAYER_WIDTH;
-                    const pushForce = Math.abs(relVx) * 0.5;
-                    currentPlayer.vx = Math.max(currentPlayer.vx, pushForce);
-                    player.vx = Math.min(player.vx, -pushForce);
-                }
-            }
-        }
-    }
-}
-
 // Performance monitoring
 let lastStatsUpdate = Date.now();
 let totalUpdates = 0;
@@ -614,20 +610,91 @@ let totalUpdates = 0;
 function gameLoop() {
     const startTime = process.hrtime.bigint();
     
-    // Reset gotHit flags at the start of each frame
+    // Reset per-frame flags at the start
     for (const [id, { player }] of players) {
         player.gotHit = false;
+        
         // Decrease invincibility timer
         if (player.invincibleTimer > 0) {
             player.invincibleTimer--;
         }
+        
+        // Decrease hit stun timer
+        if (player.hitStunTimer > 0) {
+            player.hitStunTimer--;
+        }
     }
     
-    // Update all players
+    // --- PHASE 1: Collect all active attacks ---
+    // Gather attack data before any collision processing
+    const activeAttacks = [];
+    for (const [id, { player }] of players) {
+        const attackHitbox = getAttackHitbox(player);
+        if (attackHitbox) {
+            activeAttacks.push({
+                attackerId: id,
+                attacker: player,
+                hitbox: attackHitbox
+            });
+        }
+    }
+    
+    // --- PHASE 2: Check all attack-hit connections ---
+    // Use a set to track which players have been hit this frame
+    const hitThisFrame = new Set();
+    const usedAttacks = new Set(); // Track which attacks have connected
+    
+    for (const [attackIndex, { attackerId, attacker, hitbox }] of activeAttacks.entries()) {
+        for (const [defenderId, { player: defender }] of players) {
+            if (defenderId === attackerId) continue;
+            
+            // Skip if defender already hit this frame (prevents double-hit)
+            if (hitThisFrame.has(defenderId)) continue;
+            
+            // Skip if defender is invincible
+            if (defender.invincibleTimer > 0) continue;
+            
+            // Check if attack actually hits
+            if (attackHitsPlayer(hitbox, defender)) {
+                // Apply the hit
+                applyAttackHit(defender, hitbox);
+                
+                // Mark both as used
+                hitThisFrame.add(defenderId);
+                usedAttacks.add(attackIndex);
+                
+                // Deactivate the attacker's hitbox (one hit per attack)
+                attacker.attackActive = false;
+                
+                // Check if opponent should respawn
+                if (defender.health <= 0) {
+                    defender.respawn();
+                }
+                
+                // This attack can only hit one player, stop checking
+                break;
+            }
+        }
+    }
+    
+    // --- PHASE 3: Physics update ---
     for (const [id, { player }] of players) {
         applyPhysics(player);
         checkCollision(player);
-        checkPlayerCollisions(player);
+    }
+    
+    // --- PHASE 4: Body collision resolution (player-to-player push apart) ---
+    // Resolve all body collisions simultaneously to prevent order-dependent behavior
+    const playerArray = Array.from(players.values()).map(p => p.player);
+    for (let i = 0; i < playerArray.length; i++) {
+        for (let j = i + 1; j < playerArray.length; j++) {
+            const a = playerArray[i];
+            const b = playerArray[j];
+            
+            if (playersAreColliding(a, b)) {
+                resolvePlayerBodyCollision(a, b);
+            }
+        }
     }
     
     // Apply kick magnet (lunge effect toward opponents)
@@ -646,7 +713,7 @@ function gameLoop() {
                 onGround: player.onGround,
                 color: player.color,
                 sprite: player.sprite,
-                gotHit: player.gotHit,
+                gotHit: player.hitStunTimer > 0, // Multi-frame hit indication
                 health: player.health,
                 maxHealth: MAX_HEALTH,
                 comboStage: player.comboStage,

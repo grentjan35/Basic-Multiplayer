@@ -396,6 +396,16 @@
                 return null;
             }
             
+            // IMPORTANT: Hit animation takes priority over attack animation
+            // If the player is in hit stun, show the hit frame
+            if (anim.currentAnimation === 'hit') {
+                const frames = spritesheetData.animations['hit'];
+                if (frames && frames.length > 0) {
+                    const frameName = frames[0]; // Always show frame 0 for hit
+                    return getFrameCoordinates(frameName, characterImage);
+                }
+            }
+            
             // Check if we're showing an attack animation (jab, cross, kick)
             if (anim.attackAnimation && Date.now() < anim.attackEndTime) {
                 const frame = spritesheetData.frames[anim.attackAnimation];
