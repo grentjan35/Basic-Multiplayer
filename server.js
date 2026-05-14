@@ -45,7 +45,7 @@ const WORLD_WIDTH = 5000;
 const WORLD_HEIGHT = 2000;
 
 // Available character spritesheets
-const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug'];
+const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug', 'Boss'];
 
 // Game state - SERVER ONLY
 const players = new Map();
