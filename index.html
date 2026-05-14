@@ -884,13 +884,44 @@
                 ctx.translate(0, 0);
             }
             
-            // Draw platforms
-            ctx.fillStyle = '#2a2a2a';
-            for (const plat of platforms) {
-                ctx.fillRect(plat.x, plat.y, plat.w, plat.h);
-                ctx.strokeStyle = '#333';
-                ctx.strokeRect(plat.x, plat.y, plat.w, plat.h);
-            }
+             // Draw platforms with altitude-based coloring
+             for (const plat of platforms) {
+                 // Calculate altitude ratio (0 = bottom, 1 = top of world)
+                 const altitudeRatio = plat.y / worldHeight;
+                 
+                 // Color gradient based on height:
+                 // Ground level (y near worldHeight): dark gray
+                 // Mid levels: progressively lighter/brighter
+                 // Top levels: bright highlights
+                 let r, g, b;
+                 if (altitudeRatio > 0.85) {
+                     // Ground level - dark warm gray
+                     r = 42; g = 42; b = 42;
+                 } else if (altitudeRatio > 0.7) {
+                     // Low platforms - slightly lighter
+                     r = 55; g = 58; b = 55;
+                 } else if (altitudeRatio > 0.5) {
+                     // Mid platforms - medium tone
+                     r = 68; g = 72; b = 68;
+                 } else if (altitudeRatio > 0.3) {
+                     // High platforms - lighter
+                     r = 85; g = 90; b = 85;
+                 } else if (altitudeRatio > 0.15) {
+                     // Very high - bright
+                     r = 105; g = 112; b = 105;
+                 } else {
+                     // Top of world - brightest with slight blue tint
+                     r = 130; g = 140; b = 135;
+                 }
+                 
+                 ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                 ctx.fillRect(plat.x, plat.y, plat.w, plat.h);
+                 
+                 // Add subtle highlight on top edge
+                 ctx.strokeStyle = `rgba(255, 255, 255, ${0.08 + altitudeRatio * 0.15})`;
+                 ctx.lineWidth = 1;
+                 ctx.strokeRect(plat.x, plat.y, plat.w, plat.h);
+             }
             
             // Draw players with interpolation
             for (const player of interpolatedPlayers) {

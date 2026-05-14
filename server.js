@@ -45,7 +45,7 @@ const MAX_HEALTH = 100;
 
 // World dimensions
 const WORLD_WIDTH = 5000;
-const WORLD_HEIGHT = 2000;
+const WORLD_HEIGHT = 4000;
 
 // Available character spritesheets
 const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug', 'Boss', 'Distractor Duck'];
@@ -108,29 +108,183 @@ function loadAssets() {
     console.log(`Loaded ${Object.keys(characterImages).length} character images via base64`);
 }
 
-// Initialize platforms - huge map
+// Initialize platforms - huge map with multiple height tiers
 function initPlatforms() {
     platforms = [];
     
-    // Ground floor across entire world
+    // =========================================================
+    // GROUND FLOOR - Full width across entire world
+    // =========================================================
     platforms.push({ x: 0, y: WORLD_HEIGHT - 100, w: WORLD_WIDTH, h: 100 });
     
-    // Add low platforms above ground with spacing
+    // =========================================================
+    // TIER 1: Low platforms (just above ground) - wide, easy
+    // =========================================================
     for (let x = 200; x < WORLD_WIDTH; x += 500) {
-        platforms.push({ x, y: WORLD_HEIGHT - 180, w: 150, h: 20 });
+        const plat = { x, y: WORLD_HEIGHT - 180, w: 150, h: 20 };
+        platforms.push(plat);
+        // Add a small stepping platform next to each for easier climbing
+        if (x + 300 < WORLD_WIDTH) {
+            platforms.push({ x: x + 250, y: WORLD_HEIGHT - 260, w: 80, h: 20 });
+        }
     }
-    
-    // Generate random platforms with spacing
-    for (let i = 0; i < 150; i++) {
+
+    // =========================================================
+    // TIER 2: Mid-low platforms (y: 3000-3600) - generous spacing
+    // =========================================================
+    for (let x = 50; x < WORLD_WIDTH; x += 400) {
+        const y = 3000 + Math.floor(x / 400) % 2 * 150;
+        const plat = { x, y, w: 180, h: 20 };
+        // Simple overlap check
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 120 && x + plat.w > p.x - 120 &&
+                y < p.y + p.h + 120 && y + plat.h > p.y - 120) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // TIER 3: Mid platforms (y: 2300-2900) - balanced
+    // =========================================================
+    for (let x = 100; x < WORLD_WIDTH; x += 350) {
+        const y = 2300 + Math.floor(x / 350) % 3 * 100;
+        const plat = { x, y, w: 140, h: 20 };
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 100 && x + plat.w > p.x - 100 &&
+                y < p.y + p.h + 100 && y + plat.h > p.y - 100) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // TIER 4: Mid-high platforms (y: 1600-2200) - tighter
+    // =========================================================
+    for (let x = 150; x < WORLD_WIDTH; x += 400) {
+        const y = 1600 + Math.floor(x / 400) % 4 * 80;
+        const plat = { x, y, w: 120, h: 20 };
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 90 && x + plat.w > p.x - 90 &&
+                y < p.y + p.h + 90 && y + plat.h > p.y - 90) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // TIER 5: High platforms (y: 1000-1500) - sparse
+    // =========================================================
+    for (let x = 200; x < WORLD_WIDTH; x += 500) {
+        const y = 1000 + Math.floor(x / 500) % 3 * 120;
+        const plat = { x, y, w: 100, h: 20 };
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 80 && x + plat.w > p.x - 80 &&
+                y < p.y + p.h + 80 && y + plat.h > p.y - 80) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // TIER 6: Very high platforms (y: 500-900) - very sparse
+    // =========================================================
+    for (let x = 300; x < WORLD_WIDTH; x += 600) {
+        const y = 500 + Math.floor(x / 600) % 3 * 100;
+        const plat = { x, y, w: 80, h: 20 };
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 80 && x + plat.w > p.x - 80 &&
+                y < p.y + p.h + 80 && y + plat.h > p.y - 80) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // TIER 7: Sky platforms near the top (y: 100-400) - tiny
+    // =========================================================
+    for (let x = 400; x < WORLD_WIDTH; x += 700) {
+        const y = 100 + Math.floor(x / 700) % 2 * 100;
+        const plat = { x, y, w: 60, h: 20 };
+        let overlaps = false;
+        for (const p of platforms) {
+            if (x < p.x + p.w + 70 && x + plat.w > p.x - 70 &&
+                y < p.y + p.h + 70 && y + plat.h > p.y - 70) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (!overlaps) platforms.push(plat);
+    }
+
+    // =========================================================
+    // STAIRCASE TOWERS: Vertical climbing structures
+    // Four towers at x = 800, 2000, 3200, 4400
+    // =========================================================
+    const towerPositions = [800, 2000, 3200, 4400];
+    for (const towerX of towerPositions) {
+        for (let y = WORLD_HEIGHT - 350; y > 200; y -= 280) {
+            // Stagger left-right for climbing
+            const offsetX = ((WORLD_HEIGHT - 350 - y) / 280) % 2 === 0 ? 0 : 100;
+            const plat = { x: towerX + offsetX, y, w: 120, h: 20 };
+            let overlaps = false;
+            for (const p of platforms) {
+                if (plat.x < p.x + p.w + 50 && plat.x + plat.w > p.x - 50 &&
+                    y < p.y + p.h + 50 && y + plat.h > p.y - 50) {
+                    overlaps = true;
+                    break;
+                }
+            }
+            if (!overlaps) platforms.push(plat);
+        }
+    }
+
+    // =========================================================
+    // BRIDGE PLATFORMS: Long horizontal strips at key heights
+    // =========================================================
+    const bridgeHeights = [3700, 3100, 2500, 1900, 1300, 700];
+    for (const y of bridgeHeights) {
+        for (let x = 200; x < WORLD_WIDTH - 300; x += 800) {
+            const plat = { x, y, w: 300, h: 20 };
+            let overlaps = false;
+            for (const p of platforms) {
+                if (x < p.x + p.w + 100 && x + plat.w > p.x - 100 &&
+                    y < p.y + p.h + 100 && y + plat.h > p.y - 100) {
+                    overlaps = true;
+                    break;
+                }
+            }
+            if (!overlaps) platforms.push(plat);
+        }
+    }
+
+    // =========================================================
+    // ADDITIONAL RANDOM PLATFORMS - fill gaps
+    // =========================================================
+    for (let i = 0; i < 200; i++) {
         const x = Math.random() * (WORLD_WIDTH - 300);
-        const y = 200 + Math.random() * (WORLD_HEIGHT - 500);
-        const w = 100 + Math.random() * 150;
+        const y = 100 + Math.random() * (WORLD_HEIGHT - 400);
+        const w = 60 + Math.random() * 120;
         const h = 20;
         
-        // Check for overlap with existing platforms
         let overlaps = false;
         for (const plat of platforms) {
-            const buffer = 150; // Increased spacing to prevent touching
+            const buffer = 100;
             if (x < plat.x + plat.w + buffer &&
                 x + w > plat.x - buffer &&
                 y < plat.y + plat.h + buffer &&
@@ -144,31 +298,8 @@ function initPlatforms() {
             platforms.push({ x, y, w, h });
         }
     }
-    
-    // Add structured platforms for navigation with spacing and overlap checking
-    for (let x = 100; x < WORLD_WIDTH; x += 500) {
-        for (let y = 300; y < WORLD_HEIGHT - 200; y += 350) { // Increased vertical spacing
-            const w = 150;
-            const h = 20;
-            
-            // Check for overlap with existing platforms
-            let overlaps = false;
-            for (const plat of platforms) {
-                const buffer = 100; // Buffer zone
-                if (x < plat.x + plat.w + buffer &&
-                    x + w > plat.x - buffer &&
-                    y < plat.y + plat.h + buffer &&
-                    y + h > plat.y - buffer) {
-                    overlaps = true;
-                    break;
-                }
-            }
-            
-            if (!overlaps) {
-                platforms.push({ x, y, w, h });
-            }
-        }
-    }
+
+    console.log(`Initialized ${platforms.length} platforms across the world`);
 }
 
 // Create HTTP server for serving static files
