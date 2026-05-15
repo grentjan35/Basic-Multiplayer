@@ -1,13 +1,13 @@
 ---
-title: Basic Multiplayer Platformer
+title: Mafia.io
 sdk: docker
 app_file: server.js
 disable_embedding: false
 ---
 
-# Basic Multiplayer Platformer
+# Mafia.io
 
-A lightweight multiplayer platformer game with server-authoritative physics.
+A lightweight multiplayer mafia-themed combat game with server-authoritative physics.
 
 ## How to Play
 
@@ -34,12 +34,12 @@ A lightweight multiplayer platformer game with server-authoritative physics.
 
 **Direct URL (no Hugging Face UI):**
 ```
-https://grentjan35-basic-multiplayer.hf.space/
+https://grentjan35-mafia-io.hf.space/
 ```
 
 **For embedding on your website:**
 ```html
-<iframe src="https://grentjan35-basic-multiplayer.hf.space/"
+<iframe src="https://grentjan35-mafia-io.hf.space/"
         style="width:100%; height:100vh; border:none;"
         sandbox="allow-scripts allow-same-origin">
 </iframe>
