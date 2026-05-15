@@ -21,7 +21,7 @@ const HITBOX_RIGHT_INSET = 0; // Right side is already aligned
 const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET - HITBOX_RIGHT_INSET;
 
 // Attack constants
-const ATTACK_TIMEOUT = 500; // ms before combo resets to jab
+const ATTACK_TIMEOUT = 10000; // ms before combo resets to jab (10 seconds)
 const ATTACK_ACTIVE_TIME = 200; // ms the hitbox is active
 const ATTACK_HITBOX_EXTEND = 30; // px the hitbox extends in front of player
 const ATTACK_HITBOX_WIDTH = 30;
