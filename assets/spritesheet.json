@@ -11,7 +11,7 @@
     
     "get_hit": { "row": 0, "col": 3, "desc": "Hit Stun" },
     "falling": { "row": 1, "col": 3, "desc": "Falling/Airborne", "scale": 0.85 },
-    "dead":    { "row": 2, "col": 3, "desc": "Death State" },
+    "dead":    { "row": 2, "col": 3, "desc": "Death State", "yOffset": 15 },
 
     "run_01":  { "row": 1, "col": 0, "desc": "Run Cycle 1" },
     "run_02":  { "row": 1, "col": 1, "desc": "Run Cycle 2" },

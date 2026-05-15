@@ -362,6 +362,16 @@ class Player {
         
         // Fast-fall acceleration tracking
         this.fastFallTicks = 0; // number of consecutive ticks holding down while airborne
+        
+        // Death state
+        this.isDead = false; // true when player is in death state
+        this.deathTimer = 0; // ticks until respawn (60 ticks = ~2 seconds)
+        
+        // Fade state
+        this.isFading = false; // true when player is fading out
+        this.fadeTimer = 0; // ticks until fade complete (30 ticks = ~1 second)
+        this.opacity = 1.0; // 1.0 = fully visible, 0.0 = invisible
+        this.isFadingIn = false; // true when fading in after respawn
     }
 
     // Generate dark, desaturated colors
@@ -383,6 +393,12 @@ class Player {
         this.invincibleTimer = 60; // ~2 seconds of invincibility
         this.gotHit = false;
         this.hitStunTimer = 0;
+        this.isDead = false;
+        this.deathTimer = 0;
+        this.isFading = false;
+        this.fadeTimer = 0;
+        this.opacity = 1.0;
+        this.isFadingIn = false;
     }
 }
 
@@ -428,20 +444,22 @@ function applyPhysics(player) {
         player.vy = MAX_FALL_SPEED;
     }
     
-    // Apply input forces (only if not in attack animation lock)
-    if (player.inputs.left) {
-        player.vx -= MOVE_SPEED;
-        player.facingRight = false;
-    }
-    if (player.inputs.right) {
-        player.vx += MOVE_SPEED;
-        player.facingRight = true;
-    }
-    if (player.inputs.jump && player.onGround) {
-        // Scale jump force based on horizontal velocity
-        const speedBonus = Math.abs(player.vx) * 0.5;
-        player.vy = -(JUMP_FORCE + speedBonus);
-        player.onGround = false;
+    // Apply input forces (only if not in attack animation lock and not dead)
+    if (!player.isDead) {
+        if (player.inputs.left) {
+            player.vx -= MOVE_SPEED;
+            player.facingRight = false;
+        }
+        if (player.inputs.right) {
+            player.vx += MOVE_SPEED;
+            player.facingRight = true;
+        }
+        if (player.inputs.jump && player.onGround) {
+            // Scale jump force based on horizontal velocity
+            const speedBonus = Math.abs(player.vx) * 0.5;
+            player.vy = -(JUMP_FORCE + speedBonus);
+            player.onGround = false;
+        }
     }
     // Fast-fall: hold down (S/ArrowDown) to fall faster
     // Accelerates the longer down is held while airborne
@@ -509,6 +527,40 @@ function applyPhysics(player) {
     // Reset if fallen off map
     if (player.y > WORLD_HEIGHT + 100) {
         player.respawn();
+    }
+    
+    // Handle death timer (count down regardless of ground state)
+    if (player.isDead) {
+        if (!player.isFading) {
+            // First 2 seconds: show dead sprite
+            player.deathTimer--;
+            if (player.deathTimer <= 0) {
+                // Start fading out
+                player.isFading = true;
+                player.fadeTimer = 30; // ~1 second fade out
+            }
+        } else {
+            // Fading out
+            player.fadeTimer--;
+            player.opacity = player.fadeTimer / 30; // 1.0 -> 0.0
+            if (player.fadeTimer <= 0) {
+                // Fade complete, respawn and fade in
+                player.respawn();
+                player.isFadingIn = true;
+                player.fadeTimer = 30; // ~1 second fade in
+                player.opacity = 0.0;
+            }
+        }
+    }
+    
+    // Handle fade in after respawn
+    if (player.isFadingIn) {
+        player.fadeTimer--;
+        player.opacity = 1.0 - (player.fadeTimer / 30); // 0.0 -> 1.0
+        if (player.fadeTimer <= 0) {
+            player.isFadingIn = false;
+            player.opacity = 1.0;
+        }
     }
 }
 
@@ -649,21 +701,26 @@ function getAttackHitbox(player) {
     hitboxY = player.y + yOffset;
     
     // Different attacks have different ranges
-    // Jab and cross require being close; kick has long range
+    // Jab and cross require being close; kick has long range and hits overhead
     let extend = ATTACK_HITBOX_EXTEND;
+    let hitboxHeight = ATTACK_HITBOX_HEIGHT;
+    let hitboxYOffset = yOffset;
+    
     if (combo.name === 'jab') {
         extend = ATTACK_HITBOX_EXTEND * 0.5; // short range - must be close
     } else if (combo.name === 'cross') {
         extend = ATTACK_HITBOX_EXTEND * 0.7; // medium-short range
     } else if (combo.name === 'kick') {
-        extend = ATTACK_HITBOX_EXTEND * 1.5; // long range (unchanged)
+        extend = ATTACK_HITBOX_EXTEND * 1.5; // long range
+        hitboxHeight = ATTACK_HITBOX_HEIGHT * 2; // Extend upward to hit players standing on top
+        hitboxYOffset = -10; // Position higher to cover overhead area
     }
     
     return {
         x: player.facingRight ? hitboxX : hitboxX - ATTACK_HITBOX_WIDTH,
-        y: hitboxY,
+        y: player.y + hitboxYOffset,
         w: player.facingRight ? extend : ATTACK_HITBOX_WIDTH + extend,
-        h: ATTACK_HITBOX_HEIGHT,
+        h: hitboxHeight,
         damage: combo.damage,
         knockback: combo.knockback,
         direction: player.facingRight ? 1 : -1,
@@ -785,6 +842,9 @@ function gameLoop() {
             // Skip if defender is invincible
             if (defender.invincibleTimer > 0) continue;
             
+            // Skip if defender is dead (dead players are invulnerable)
+            if (defender.isDead) continue;
+            
             // Check if attack actually hits
             if (attackHitsPlayer(hitbox, defender)) {
                 // Apply the hit
@@ -797,9 +857,10 @@ function gameLoop() {
                 // Deactivate the attacker's hitbox (one hit per attack)
                 attacker.attackActive = false;
                 
-                // Check if opponent should respawn
+                // Check if opponent should die
                 if (defender.health <= 0) {
-                    defender.respawn();
+                    defender.isDead = true;
+                    defender.deathTimer = 60; // ~2 seconds at 30 TPS
                 }
                 
                 // This attack can only hit one player, stop checking
@@ -849,7 +910,10 @@ function gameLoop() {
                 maxHealth: MAX_HEALTH,
                 comboStage: player.comboStage,
                 attackActive: player.attackActive,
-                facingRight: player.facingRight
+                facingRight: player.facingRight,
+                isDead: player.isDead,
+                opacity: player.opacity,
+                isFadingIn: player.isFadingIn
             });
         }
         

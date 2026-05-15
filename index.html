@@ -229,7 +229,8 @@
                 y: frame.row * frameHeight,
                 width: frameWidth,
                 height: frameHeight,
-                scale: frame.scale || 1.0 // Per-frame scale factor for oversized sprites
+                scale: frame.scale || 1.0, // Per-frame scale factor for oversized sprites
+                yOffset: frame.yOffset || 0 // Per-frame y offset for positioning
             };
         }
 
@@ -260,10 +261,15 @@
                 anim.facingRight = true;
             }
             
-            // Check if player is in hit stun animation
-            if (now < anim.hitEndTime) {
-                anim.currentAnimation = 'hit';
-                anim.frameIndex = 0;
+            // Check if player is dead - show dead sprite when on ground, falling when in air
+            if (playerState.isDead) {
+                if (playerState.onGround) {
+                    anim.currentAnimation = 'death';
+                    anim.frameIndex = 2; // dead frame
+                } else {
+                    anim.currentAnimation = 'falling';
+                    anim.frameIndex = 0;
+                }
                 return;
             }
             
@@ -437,7 +443,10 @@
                 maxHealth: state1.maxHealth,
                 comboStage: state1.comboStage,
                 attackActive: state1.attackActive,
-                facingRight: state1.facingRight
+                facingRight: state1.facingRight,
+                isDead: state2.isDead,
+                opacity: state2.opacity,
+                isFadingIn: state2.isFadingIn
             };
         }
 
@@ -564,6 +573,9 @@
                             comboStage: comboStage,
                             attackActive: attackActive,
                             facingRight: player.facingRight,
+                            isDead: player.isDead,
+                            opacity: player.opacity,
+                            isFadingIn: player.isFadingIn,
                             timestamp: timestamp
                         });
                         
@@ -728,6 +740,11 @@
             const maxHealth = player.maxHealth !== undefined ? player.maxHealth : 100;
             const healthPercent = Math.max(0, health / maxHealth);
             
+            // Apply opacity for fade in/out
+            const opacity = player.opacity !== undefined ? player.opacity : 1.0;
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            
             // Background (dark)
             ctx.fillStyle = '#333';
             ctx.fillRect(barX, barY, barWidth, barHeight);
@@ -747,6 +764,8 @@
             ctx.font = '8px monospace';
             ctx.textAlign = 'center';
             ctx.fillText(`${Math.ceil(health)}/${maxHealth}`, barX + barWidth / 2, barY - 2);
+            
+            ctx.restore();
         }
 
         // Draw a single player with their character spritesheet
@@ -789,9 +808,13 @@
                     const normalWidth = Math.round(frame.width * (targetHeight / frame.height));
                     const normalHeight = targetHeight;
                     const offsetX = Math.round((normalWidth - drawWidth) / 2);
-                    const offsetY = Math.round((normalHeight - drawHeight) / 2);
+                    const offsetY = Math.round((normalHeight - drawHeight) / 2) + (frame.yOffset || 0);
                     
                     ctx.save();
+                    
+                    // Apply opacity for fade in/out
+                    const opacity = player.opacity !== undefined ? player.opacity : 1.0;
+                    ctx.globalAlpha = opacity;
                     
                     // Flip sprite if facing left
                     if (!anim.facingRight) {
