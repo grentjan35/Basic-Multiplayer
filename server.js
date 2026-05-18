@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const botAI = require('./botAI');
 
 // Server configuration
 const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
@@ -9,7 +10,7 @@ const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
 const GRAVITY = 0.5;
-const FRICTION = 1.0;
+const FRICTION = 0.92;
 const AIR_RESISTANCE = 0.98;
 const MOVE_SPEED = 0.5;
 const JUMP_FORCE = 10;
@@ -342,7 +343,11 @@ class Player {
         this.onGround = false;
         this.color = this.generateDarkColor();
         this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
-        this.inputs = { left: false, right: false, jump: false, attack: false };
+        this.inputs = { left: false, right: false, jump: false, attack: false, down: false };
+        // Single jump system
+        this.jumpsRemaining = 1; // Allow single jump
+        this.prevJumpInput = false; // Track previous jump input state for edge detection
+        this.jumpPressed = false; // Whether jump input is freshly pressed this tick
         this.attackProcessed = false; // Prevents attack spam while holding space
         this.gotHit = false; // Tracks if player was hit this frame
         
@@ -454,11 +459,28 @@ function applyPhysics(player) {
             player.vx += MOVE_SPEED;
             player.facingRight = true;
         }
-        if (player.inputs.jump && player.onGround) {
-            // Scale jump force based on horizontal velocity
+        
+        // Single jump system with edge detection (only jump on press, not hold)
+        const jumpJustPressed = player.inputs.jump && !player.prevJumpInput;
+        player.prevJumpInput = player.inputs.jump;
+        
+        if (jumpJustPressed && player.jumpsRemaining > 0 && player.onGround) {
+            // Scale jump force based on horizontal velocity (momentum)
             const speedBonus = Math.abs(player.vx) * 0.5;
-            player.vy = -(JUMP_FORCE + speedBonus);
+            const jumpForce = JUMP_FORCE + speedBonus;
+            
+            player.vy = -jumpForce;
             player.onGround = false;
+            player.jumpsRemaining = 0; // Jump used
+        }
+    }
+    
+    // Reset jumps when landing
+    if (player.onGround) {
+        player.jumpsRemaining = 1;
+        // Reset prevJumpInput so holding jump while landing re-triggers it next tick
+        if (player.inputs.jump) {
+            player.prevJumpInput = false;
         }
     }
     // Fast-fall: hold down (S/ArrowDown) to fall faster
@@ -526,7 +548,28 @@ function applyPhysics(player) {
     
     // Reset if fallen off map
     if (player.y > WORLD_HEIGHT + 100) {
-        player.respawn();
+        if (typeof player.respawn === 'function') {
+            player.respawn();
+        } else {
+            // Bot players are plain objects without respawn() method
+            player.x = 100 + Math.random() * 500;
+            player.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+            player.vx = 0;
+            player.vy = 0;
+            player.onGround = false;
+            player.comboStage = 0;
+            player.attackActive = false;
+            player.invincibleTimer = 60;
+            player.gotHit = false;
+            player.hitStunTimer = 0;
+            player.isDead = false;
+            player.deathTimer = 0;
+            player.isFading = false;
+            player.fadeTimer = 0;
+            player.opacity = 1.0;
+            player.isFadingIn = false;
+            player.health = 100;
+        }
     }
     
     // Handle death timer (count down regardless of ground state)
@@ -545,7 +588,28 @@ function applyPhysics(player) {
             player.opacity = player.fadeTimer / 30; // 1.0 -> 0.0
             if (player.fadeTimer <= 0) {
                 // Fade complete, respawn and fade in
-                player.respawn();
+                if (typeof player.respawn === 'function') {
+                    player.respawn();
+                } else {
+                    // Bot players are plain objects without respawn()
+                    player.health = 100;
+                    player.x = 100 + Math.random() * 500;
+                    player.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+                    player.vx = 0;
+                    player.vy = 0;
+                    player.onGround = false;
+                    player.comboStage = 0;
+                    player.attackActive = false;
+                    player.invincibleTimer = 60;
+                    player.gotHit = false;
+                    player.hitStunTimer = 0;
+                    player.isDead = false;
+                    player.deathTimer = 0;
+                    player.isFading = false;
+                    player.fadeTimer = 0;
+                    player.opacity = 1.0;
+                    player.isFadingIn = false;
+                }
                 player.isFadingIn = true;
                 player.fadeTimer = 30; // ~1 second fade in
                 player.opacity = 0.0;
@@ -793,10 +857,16 @@ function applyKickMagnet() {
 // Performance monitoring
 let lastStatsUpdate = Date.now();
 let totalUpdates = 0;
+let gameTickCounter = 0;
 
 // Main game loop - SERVER ONLY
 function gameLoop() {
     const startTime = process.hrtime.bigint();
+    gameTickCounter++;
+    
+    // --- PHASE 0: Bot AI update ---
+    // Run bot AI BEFORE physics so bots set their inputs for this tick
+    botAI.updateBotAI(players, platforms, WORLD_WIDTH, WORLD_HEIGHT, gameTickCounter);
     
     // Reset per-frame flags at the start
     for (const [id, { player }] of players) {
@@ -923,7 +993,7 @@ function gameLoop() {
         });
         
         for (const [id, { ws }] of players) {
-            if (ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(message);
             }
         }
@@ -935,7 +1005,6 @@ function gameLoop() {
     if (now - lastStatsUpdate > 5000) { // Log every 5 seconds
         const endTime = process.hrtime.bigint();
         const avgTime = Number(endTime - startTime) / 1000000; // Convert to milliseconds
-        // console.log(`Game loop: ${totalUpdates} updates, avg time: ${avgTime.toFixed(2)}ms, players: ${players.size}`);
         totalUpdates = 0;
         lastStatsUpdate = now;
     }
