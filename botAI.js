@@ -448,7 +448,7 @@ class BotAI {
         }
 
         // --- Anti-stuck logic ---
-        this.antiStuckCheck(botPlayer, currentTick);
+        this.antiStuckCheck(botPlayer, platforms, currentTick);
 
         // --- Attack cooldown ---
         if (this.attackCooldown > 0) this.attackCooldown--;
@@ -574,7 +574,7 @@ class BotAI {
         // Detect if both on full-width ground
         const botOnGround = this.isGroundPlatform(botPlayer, platforms);
         let targetOnGround = false;
-        if (target && typeof target.y === 'number') {
+        if (typeof target.y === 'number') {
             const targetFeetY = target.y + 60;
             for (const p of platforms) {
                 if (targetFeetY >= p.y - 5 && targetFeetY <= p.y + 15 && p.w > 4500) {
@@ -584,8 +584,12 @@ class BotAI {
             }
         }
 
-        // If both on ground and target is above (jumpable platforms in between),
-        // always use directMove which has ground-climbing logic
+        // Clamp chase target so the bot stops at combat distance instead of
+        // moving onto the player's exact coordinates.
+        target = this.getCombatTarget(botPlayer, target);
+
+        // Use DirectMove when both are on ground and target is elevated so
+        // the bot can climb toward the player.
         if (botOnGround && !targetOnGround) {
             this.path = [];
             this.directMove(botPlayer, target.x, target.y, platforms, currentTick);
@@ -747,7 +751,16 @@ class BotAI {
         }
 
         // Find path in graph
-        const nodePath = findPathInGraph(platformGraph, botPlatform, targetPlatform);
+        let nodePath = findPathInGraph(platformGraph, botPlatform, targetPlatform);
+
+        // If no path found or path is just the start node (no actual path),
+        // try to find an alternative platform near the target
+        if (nodePath.length <= 1 || (nodePath.length === 1 && nodePath[0] === botPlatform)) {
+            const alternativePlatform = this.findAlternativePlatform(botPlatform, targetPlatform, targetX, platforms);
+            if (alternativePlatform !== null && alternativePlatform !== targetPlatform) {
+                nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform);
+            }
+        }
 
         // Convert node path to waypoints
         this.path = [];
@@ -770,6 +783,40 @@ class BotAI {
         });
 
         this.pathIndex = 0;
+    }
+
+    // Find an alternative platform near the target that might be reachable
+    findAlternativePlatform(botPlatform, targetPlatform, targetX, platforms) {
+        if (targetPlatform < 0) return null;
+
+        const targetPlat = platforms[targetPlatform];
+        let bestAlternative = null;
+        let bestScore = Infinity;
+
+        for (let i = 0; i < platforms.length; i++) {
+            if (i === botPlatform || i === targetPlatform) continue;
+
+            const p = platforms[i];
+            
+            // Calculate distance from this platform to target platform
+            const dx = (p.x + p.w / 2) - (targetPlat.x + targetPlat.w / 2);
+            const dy = p.y - targetPlat.y;
+            const distToTarget = Math.sqrt(dx * dx + dy * dy);
+
+            // Prefer platforms at similar height to target (easier to reach player from there)
+            const heightDiff = Math.abs(p.y - targetPlat.y);
+            
+            // Score: distance to target + height penalty
+            const score = distToTarget + heightDiff * 2;
+
+            // Only consider platforms within reasonable distance
+            if (distToTarget < 400 && score < bestScore) {
+                bestScore = score;
+                bestAlternative = i;
+            }
+        }
+
+        return bestAlternative;
     }
 
     followPath(botPlayer, platforms, currentTick) {
@@ -916,6 +963,40 @@ class BotAI {
         return bestPlat;
     }
 
+    getCombatTarget(botPlayer, /* {x,y} */ target) {
+        if (!target) {
+            return null;
+        }
+
+        const bx = botPlayer.x;
+        const by = botPlayer.y;
+        const tx = target.x;
+        const ty = target.y;
+
+        const desiredChaseDist = this.attackRange + 60; // fight from ~1.5 attack-radii away
+
+        const dx = tx - bx;
+        const dy = ty - by;
+        const absDx = Math.abs(dx);
+
+        // Already inside the combat ring – lock to the player's position.
+        if (absDx <= desiredChaseDist) {
+            return { x: tx, y: ty };
+        }
+
+        // True 2-D projection: scale Y on the same ratio as X so the bot's
+        // stop-point stays at the correct *vertical* level too, never ending
+        // up directly underneath or on top of the player.
+        const rawDist   = Math.sqrt(dx * dx + dy * dy) || 1;
+        const rawFactor = desiredChaseDist / rawDist;
+
+        // Exact point on the combat ring along the bot→player ray
+        return {
+            x: bx + dx * rawFactor,
+            y: by + dy * rawFactor,
+        };
+    }
+
     directMove(botPlayer, targetX, targetY, platforms, currentTick) {
         const dx = targetX - botPlayer.x;
         const dy = targetY - botPlayer.y;
@@ -1059,7 +1140,7 @@ class BotAI {
     // ANTI-STUCK LOGIC
     // ============================================================
 
-    antiStuckCheck(botPlayer, currentTick) {
+    antiStuckCheck(botPlayer, platforms, currentTick) {
         const moved = Math.abs(botPlayer.x - this.lastPosition.x) > 2 ||
                       Math.abs(botPlayer.y - this.lastPosition.y) > 2;
 
@@ -1094,16 +1175,53 @@ class BotAI {
             this.debugInfo += ' STUCK!';
         }
 
-        // Platform fail check
+        // Platform fail check - try alternative platform
         if (this.jumpAttempts > 5 && this.state === 'CHASE') {
-            // Failed to reach platform, recalculate
-            this.path = [];
-            this.pathIndex = 0;
-            this.jumpAttempts = 0;
-
-            // Try opposite direction
-            this.wanderDirection *= -1;
-            this.debugInfo += ' PLATFORM_FAIL!';
+            // Failed to reach platform, try alternative
+            const botPlatform = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+            
+            // If we have a target platform in our path, try alternative
+            if (this.path.length > 0 && this.path[0].platformIndex >= 0) {
+                const targetPlatform = this.path[0].platformIndex;
+                const alternativePlatform = this.findAlternativePlatform(botPlatform, targetPlatform, this.path[0].x, platforms);
+                
+                if (alternativePlatform !== null && alternativePlatform !== targetPlatform) {
+                    // Rebuild path to alternative platform
+                    if (!platformGraph || graphBuildVersion !== platforms.length) {
+                        platformGraph = buildPlatformGraph(platforms);
+                        graphBuildVersion = platforms.length;
+                    }
+                    
+                    const nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform);
+                    this.path = [];
+                    for (const nodeIdx of nodePath) {
+                        const p = platforms[nodeIdx];
+                        const wayX = this.path[0].x < p.x + p.w / 2 ? p.x + 20 : p.x + p.w - 20;
+                        this.path.push({
+                            x: wayX,
+                            y: p.y,
+                            platformIndex: nodeIdx
+                        });
+                    }
+                    this.pathIndex = 0;
+                    this.jumpAttempts = 0;
+                    this.debugInfo += ' ALT_PLAT!';
+                } else {
+                    // No alternative found, just reset
+                    this.path = [];
+                    this.pathIndex = 0;
+                    this.jumpAttempts = 0;
+                    this.wanderDirection *= -1;
+                    this.debugInfo += ' PLATFORM_FAIL!';
+                }
+            } else {
+                // No path target, just reset
+                this.path = [];
+                this.pathIndex = 0;
+                this.jumpAttempts = 0;
+                this.wanderDirection *= -1;
+                this.debugInfo += ' PLATFORM_FAIL!';
+            }
         }
     }
 

@@ -10,7 +10,7 @@ const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
 const GRAVITY = 0.5;
-const FRICTION = 0.92;
+const FRICTION = 0.97;
 const AIR_RESISTANCE = 0.98;
 const MOVE_SPEED = 0.5;
 const JUMP_FORCE = 10;
@@ -496,7 +496,8 @@ function applyPhysics(player) {
     }
     
     // Process attack input (only once per press, not every tick while held)
-    if (player.inputs.attack && !player.attackProcessed) {
+    // Only process attack if player is not dead
+    if (!player.isDead && player.inputs.attack && !player.attackProcessed) {
         player.attackProcessed = true;
         // Check combo timing
         const now = Date.now();
