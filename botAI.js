@@ -2,19 +2,19 @@
 // Handles bot spawning, pathfinding, platform navigation, vision, and combat
 
 // ============================================================
-// CONSTANTS
-// ============================================================
-const BOT_VIEW_DISTANCE = 1000; // pixels (~25 game units)
-const BOT_FOV_DEGREES = 120; // field of view in degrees
-const BOT_ATTACK_RANGE = 55; // px - proximity to trigger attack
-const BOT_CHASE_RANGE = 800; // px - distance to start/stop chasing
-const BOT_STUCK_TIMEOUT = 90; // ticks (3 sec at 30 TPS) before path recalc
-const BOT_PLATFORM_FAIL_TIMEOUT = 60; // ticks before giving up on a platform jump
-const MAX_SINGLE_JUMP_HEIGHT = 100; // px - max height reachable with single jump
-const MAX_DOUBLE_JUMP_HEIGHT = 200; // px - max height reachable with double jump
-const MAX_HORIZONTAL_JUMP_DIST = 500; // px - max horizontal distance for a jump
-const MAX_DROP_DIST = 300; // px - max distance to consider dropping down
-const BOT_PERSONALITIES = ['aggressive', 'cautious', 'fast', 'balanced'];
+    // CONSTANTS
+    // ============================================================
+    const BOT_VIEW_DISTANCE = 1000; // pixels (~25 game units)
+    const BOT_FOV_DEGREES = 120; // field of view in degrees
+    const BOT_ATTACK_RANGE = 70; // px - proximity to trigger attack (increased for earlier attacks)
+    const BOT_CHASE_RANGE = 800; // px - distance to start/stop chasing
+    const BOT_STUCK_TIMEOUT = 90; // ticks (3 sec at 30 TPS) before path recalc
+    const BOT_PLATFORM_FAIL_TIMEOUT = 60; // ticks before giving up on a platform jump
+    const MAX_SINGLE_JUMP_HEIGHT = 100; // px - max height reachable with single jump
+    const MAX_DOUBLE_JUMP_HEIGHT = 200; // px - max height reachable with double jump
+    const MAX_HORIZONTAL_JUMP_DIST = 500; // px - max horizontal distance for a jump
+    const MAX_DROP_DIST = 300; // px - max distance to consider dropping down
+    const BOT_PERSONALITIES = ['aggressive', 'cautious', 'fast', 'balanced'];
 
 // ============================================================
 // PLATFORM GRAPH - Navigation graph for pathfinding
@@ -341,6 +341,9 @@ class BotAI {
         this.targetLockTimer = 0;
         this.attackCooldown = 0;
         this.debugInfo = '';
+        this.revengeTargetId = null;
+        this.revengeTimer = 0;
+        this.recentHitByIds = [];
 
         // Personality modifiers
         switch (personality) {
@@ -388,9 +391,61 @@ class BotAI {
         // Store debug info
         this.debugInfo = `${this.state} | `;
 
+        // Update revenge timer
+        if (this.revengeTimer > 0) {
+            this.revengeTimer--;
+            if (this.revengeTimer <= 0) {
+                this.revengeTargetId = null;
+                this.recentHitByIds = [];
+            }
+        }
+
         // Update current platform
         this.currentPlatformIndex = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
         this.debugInfo += `plat:${this.currentPlatformIndex} | `;
+
+        // --- Register who this bot just landed a hit on (for revenge trigger) ---
+        if (botPlayer.gotHit) {
+            if (this.targetPlayerId && playerMap.has(this.targetPlayerId)) {
+                var attacker = playerMap.get(this.targetPlayerId).player;
+                if (!attacker.isDead) {
+                    this.registerHitBy(this.targetPlayerId);
+                }
+            } else {
+                var bestAggressor = null;
+                var bestAggressorScore = Infinity;
+                for (var pair of playerMap) {
+                    var id = pair[0];
+                    var p = pair[1].player;
+                    if (id === this.playerId || p.isDead) continue;
+                    var dx = p.x - botPlayer.x;
+                    var dy_1 = p.y - botPlayer.y;
+                    var dist = Math.sqrt(dx * dx + dy_1 * dy_1);
+                    if (dist > BOT_ATTACK_RANGE * 3) continue;
+                    var facingAway = (p.facingRight && p.x < botPlayer.x)
+                                 || (!p.facingRight && p.x > botPlayer.x);
+                    var score = dist + (facingAway ? 0 : 200);
+                    if (score < bestAggressorScore) {
+                        bestAggressorScore = score;
+                        bestAggressor = p;
+                    }
+                }
+                if (bestAggressor) {
+                    this.registerHitBy(bestAggressor.id);
+                }
+            }
+        }
+
+        // --- Revenge override: if someone hit us recently, hunt them first ---
+        if (this.recentHitByIds.length > 0) {
+            var revengeTargetId = this.recentHitByIds[0];
+            var revengeTarget = playerMap.get(revengeTargetId);
+            if (revengeTarget && !revengeTarget.player.isDead) {
+                this.targetPlayerId = revengeTargetId;
+                this.targetLockTimer = 30;
+                this.state = 'CHASE';
+            }
+        }
 
         // --- State Machine ---
         const visibleTarget = this.assessThreats(botPlayer, playerMap, platforms);
@@ -455,37 +510,47 @@ class BotAI {
     }
 
     assessThreats(botPlayer, playerMap, platforms) {
-        let closestTarget = null;
-        let closestDist = Infinity;
-        let closestHuman = null;
-        let closestHumanDist = Infinity;
+        var botAIs = global.botAIs || new Map();
 
-        for (const [id, { player }] of playerMap) {
+        var closestTarget = null;
+        var closestDist = Infinity;
+        var closestHuman = null;
+        var closestHumanDist = Infinity;
+
+        // ---- PASS 1: collect raw candidates ----
+        for (var pair of playerMap) {
+            var id = pair[0];
+            var data = pair[1];
+            var player = data.player;
             if (id === this.playerId || player.isDead) continue;
 
-            const dx = player.x - botPlayer.x;
-            const dy = player.y - botPlayer.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+            var dx = player.x - botPlayer.x;
+            var dy = player.y - botPlayer.y;
+            var dist = Math.sqrt(dx * dx + dy * dy);
 
             if (dist > BOT_VIEW_DISTANCE) continue;
 
-            const isHuman = !player.isBot;
+            var isHuman = !player.isBot;
 
-            // Prioritize human players - use wider detection for them
-            if (isHuman) {
-                // Humans are always detectable regardless of FOV/line-of-sight
-                // if they're within detection range
-                if (dist < closestHumanDist) {
-                    closestHumanDist = dist;
-                    closestHuman = player;
-                }
-                continue; // Don't fall through to the FOV/LOS check for humans
+            // Revenge priority: return immediately if someone just hit us
+            if (this.recentHitByIds.indexOf(id) !== -1) {
+                return player;
             }
 
-            // For other bots, require FOV and line of sight
-            const angleToTarget = Math.atan2(dx, dy) * (180 / Math.PI);
-            const facingAngle = botPlayer.facingRight ? 90 : -90;
-            const angleDiff = normalizeAngle(angleToTarget - facingAngle);
+            if (isHuman) {
+                // Penalise airborne human targets — bots should prefer grounded players
+                var groundedPenalty = player.onGround ? 0 : 500;
+                if (dist + groundedPenalty < closestHumanDist) {
+                    closestHumanDist = dist + groundedPenalty;
+                    closestHuman = player;
+                }
+                continue;
+            }
+
+            // Fellow bots: FOV + LOS required
+            var angleToTarget = Math.atan2(dx, dy) * (180 / Math.PI);
+            var facingAngle = botPlayer.facingRight ? 90 : -90;
+            var angleDiff = normalizeAngle(angleToTarget - facingAngle);
 
             if (Math.abs(angleDiff) > BOT_FOV_DEGREES / 2) continue;
 
@@ -500,12 +565,58 @@ class BotAI {
             }
         }
 
-        // If a human was detected, always target them instead of a bot
-        if (closestHuman) {
-            return closestHuman;
+        // ---- PASS 2: count how many bots are already targeting each candidate ----
+        var targetCounts = new Map();
+
+        for (var pair2 of playerMap) {
+            var id2 = pair2[0];
+            var data2 = pair2[1];
+            if (!data2.player.isBot || id2 === this.playerId) continue;
+            var ai = botAIs.get(id2);
+            if (!ai || !ai.targetPlayerId) continue;
+            var tgt = ai.targetPlayerId;
+            var tgtData = playerMap.get(tgt);
+            if (tgtData) {
+                targetCounts.set(tgt, (targetCounts.get(tgt) || 0) + 1);
+            }
         }
 
-        return closestTarget;
+        // ---- PASS 3: score candidates with focus-fire penalty ----
+        function scoreTarget(p, baseScore) {
+            var botsOnTarget = targetCounts.get(p.id) || 0;
+            return baseScore + botsOnTarget * 100;
+        }
+
+        var selectedHuman = null;
+        var bestHumanScore = Infinity;
+        if (closestHuman) {
+            var humanScore = scoreTarget(closestHuman, 0);
+            var botsOnHuman = targetCounts.get(closestHuman.id) || 0;
+            if (botsOnHuman < 3) {
+                bestHumanScore = humanScore;
+                selectedHuman = closestHuman;
+            }
+        }
+
+        var selectedBot = null;
+        var bestBotScore = Infinity;
+        if (closestTarget) {
+            var botScore = scoreTarget(closestTarget, 200);
+            var botsOnBot = targetCounts.get(closestTarget.id) || 0;
+            if (botsOnBot < 3) {
+                bestBotScore = botScore;
+                selectedBot = closestTarget;
+            }
+        }
+
+        // ---- PASS 4: decide final target ----
+        if (selectedHuman && (!selectedBot || bestHumanScore <= bestBotScore)) {
+            return selectedHuman;
+        }
+        if (selectedBot) {
+            return selectedBot;
+        }
+        return null;
     }
 
     findPlayerById(playerMap, id) {
@@ -515,11 +626,25 @@ class BotAI {
         return null;
     }
 
+    // Call when *someone else* attacked this bot — sets up a revenge cycle
+    registerHitBy(attackerId) {
+        if (this.recentHitByIds.indexOf(attackerId) === -1) {
+            this.recentHitByIds.push(attackerId);
+        }
+        // Revenge priority: last 3 seconds @ 30 TPS
+        this.revengeTimer = 90;
+        this.lastAttackTime = Date.now();
+        this.attackActive = false;
+    }
+
     canAttackTarget(botPlayer, targetPlayer, platforms) {
         if (!targetPlayer) return false;
         const dx = targetPlayer.x - botPlayer.x;
         const dy = targetPlayer.y - botPlayer.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+        // Require roughly same vertical level to avoid attacking from different heights
+        const verticalThreshold = 30; // pixels
+        if (Math.abs(dy) > verticalThreshold) return false;
         return dist <= BOT_ATTACK_RANGE * 1.3;
     }
 
@@ -571,12 +696,24 @@ class BotAI {
             return;
         }
 
+        // If the chased target is a real player object, check if they're airborne.
+        // When the player is in mid-air, stop aggressive horizontal pursuit and hold
+        // position on the current platform instead of blindly chasing.
+        if (target.isBot === false && !target.onGround) {
+            // Target is airborne — hold position and wait for them to land
+            botPlayer.inputs.right = false;
+            botPlayer.inputs.left = false;
+            this.state = 'PATROL';
+            this.debugInfo += 'WAIT_FOR_LAND';
+            return;
+        }
+
         // Detect if both on full-width ground
         const botOnGround = this.isGroundPlatform(botPlayer, platforms);
         let targetOnGround = false;
         if (typeof target.y === 'number') {
             const targetFeetY = target.y + 60;
-            for (const p of platforms) {
+            for (var p of platforms) {
                 if (targetFeetY >= p.y - 5 && targetFeetY <= p.y + 15 && p.w > 4500) {
                     targetOnGround = true;
                     break;
@@ -614,6 +751,17 @@ class BotAI {
     attackBehavior(botPlayer, targetPlayer, platforms, currentTick) {
         if (!targetPlayer) {
             this.state = 'CHASE';
+            return;
+        }
+
+        // If the target is a human player who is airborne, stop chasing them.
+        // Hold current position — don't walk off edges chasing a falling/jumping player.
+        if (!targetPlayer.isBot && !targetPlayer.onGround) {
+            botPlayer.inputs.right = false;
+            botPlayer.inputs.left = false;
+            botPlayer.inputs.jump = false;
+            botPlayer.inputs.down = false;
+            this.debugInfo += 'ATTACK(WAIT)';
             return;
         }
 
@@ -984,16 +1132,14 @@ class BotAI {
             return { x: tx, y: ty };
         }
 
-        // True 2-D projection: scale Y on the same ratio as X so the bot's
-        // stop-point stays at the correct *vertical* level too, never ending
-        // up directly underneath or on top of the player.
-        const rawDist   = Math.sqrt(dx * dx + dy * dy) || 1;
-        const rawFactor = desiredChaseDist / rawDist;
+        // Position to the side of the player at the same elevation
+        const sideOffset = 60; // pixels to the side
+        const targetX = dx > 0 ? tx + sideOffset : tx - sideOffset;
+        const targetY = ty; // same level as player
 
-        // Exact point on the combat ring along the bot→player ray
         return {
-            x: bx + dx * rawFactor,
-            y: by + dy * rawFactor,
+            x: targetX,
+            y: targetY,
         };
     }
 
@@ -1239,6 +1385,9 @@ class BotAI {
         this.currentPlatformIndex = -1;
         this.targetLockTimer = 0;
         this.targetPlayerId = null;
+        this.revengeTargetId = null;
+        this.revengeTimer = 0;
+        this.recentHitByIds = [];
     }
 }
 
@@ -1248,7 +1397,7 @@ class BotAI {
 
 let botAIs = new Map(); // playerId -> BotAI
 const BOT_NAMES = ['Bot Alpha', 'Bot Beta', 'Bot Gamma', 'Bot Delta', 'Bot Epsilon', 'Bot Zeta'];
-const BOT_CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'Street Thug', 'Dark Cowboy'];
+const BOT_CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug', 'Boss', 'Distractor Duck', 'Dark Cowboy', 'Racketeer', 'Purple', 'Guard', 'Dock Overseer', 'Hostage', 'Doorman'];
 
 function getBotName(index) {
     return BOT_NAMES[index % BOT_NAMES.length];
@@ -1259,6 +1408,8 @@ function getBotPersonality(index) {
 }
 
 // Find a spawn position that doesn't overlap with players
+// For the first 8 bots (botIndex 0-7), place them on the highest platforms at the very top of the map.
+// The remaining 2 bots (botIndex 8-9) spawn on lower platforms or ground.
 function findBotSpawnPosition(players, platforms, worldWidth, worldHeight) {
     const PLAYER_WIDTH = 40;
     const PLAYER_HEIGHT = 60;
@@ -1266,14 +1417,37 @@ function findBotSpawnPosition(players, platforms, worldWidth, worldHeight) {
     const maxAttempts = 50;
 
     while (attempts < maxAttempts) {
-        // Pick a random platform (prefer ground or low platforms)
+        // HIGH TIER: TIER 7 (y: 100-200) — absolute sky platforms at the very top of the world
+        // HIGH TIER: TIER 6 (y: 500-700) — very high platforms just below the sky tier
+        // LOW TIER: ground and low platforms
+        let highTierPlatforms = [];
+        let lowTierPlatforms = [];
+
+        for (const p of platforms) {
+            if (p.y <= 400) {
+                highTierPlatforms.push(p);
+            } else {
+                lowTierPlatforms.push(p);
+            }
+        }
+
+        // Use global spawn counter via botAIs to know how many bots have been spawned this session
+        const existingBotCount = global.botAIs ? global.botAIs.size : 0;
+        const useHighTier = existingBotCount < 8; // First 8 bots → very top of map
+
         let platform;
-        if (Math.random() < 0.4) {
+        if (useHighTier && highTierPlatforms.length > 0) {
+            // Spawn on the highest platforms available (sky tier / TIER 6)
+            platform = highTierPlatforms[Math.floor(Math.random() * highTierPlatforms.length)];
+        } else if (Math.random() < 0.4) {
             // Spawn on ground
-            platform = platforms[0]; // ground is first platform
+            platform = platforms[0];
+        } else if (lowTierPlatforms.length > 0) {
+            // Spawn on a random lower platform
+            platform = lowTierPlatforms[Math.floor(Math.random() * lowTierPlatforms.length)];
         } else {
-            // Spawn on a random platform
-            platform = platforms[Math.floor(Math.random() * platforms.length)];
+            // Fallback: ground
+            platform = platforms[0];
         }
 
         const x = platform.x + 20 + Math.random() * Math.max(1, platform.w - 60);
@@ -1434,23 +1608,23 @@ function updateBotAI(players, platforms, worldWidth, worldHeight, currentTick) {
     const humanCount = getHumanPlayerCount(players);
     const currentBotCount = getBotCount(players);
 
-    if (humanCount === 0 && currentBotCount < 3) {
+    if (humanCount === 0 && currentBotCount < 10) {
         // Spawn missing bots
-        for (let i = currentBotCount; i < 3; i++) {
+        for (let i = currentBotCount; i < 10; i++) {
             const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
             // Add to players map
             const ws = null; // bots don't have WebSocket
             players.set(botPlayer.id, { player: botPlayer, ws });
         }
-        console.log(`Spawned ${3 - currentBotCount} bots (no human players)`);
-    } else if (humanCount > 0 && currentBotCount < 3) {
+        console.log(`Spawned ${10 - currentBotCount} bots (no human players)`);
+    } else if (humanCount > 0 && currentBotCount < 10) {
         // Keep bots for practice even when human players are present
-        for (let i = currentBotCount; i < 3; i++) {
+        for (let i = currentBotCount; i < 10; i++) {
             const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
             const ws = null;
             players.set(botPlayer.id, { player: botPlayer, ws });
         }
-        console.log(`Spawned ${3 - currentBotCount} bots alongside human players`);
+        console.log(`Spawned ${10 - currentBotCount} bots alongside human players`);
     }
 
     // Update each bot's AI

@@ -92,6 +92,10 @@
         let worldWidth = 0;
         let worldHeight = 0;
         
+        // Player dimensions (must match server.js constants)
+        const PLAYER_WIDTH  = 40;
+        const PLAYER_HEIGHT = 60;
+        
         // Loading & fade system - black screen until everything is ready
         let loadingComplete = false;
         let fadeAlpha = 1.0; // Start fully black
@@ -217,9 +221,8 @@
             const gridCols = parseInt(gridInfo[0]);
             const gridRows = parseInt(gridInfo[1]);
             
-            // Use the provided character image (not a generic one) to calculate frame dimensions
+            // Use the provided character image to calculate frame dimensions
             const img = characterImage || Object.values(characterImages)[0];
-            if (!img) return null;
             
             const frameWidth = img.width / gridCols;
             const frameHeight = img.height / gridRows;
@@ -329,6 +332,8 @@
                     if (frames) {
                         anim.frameIndex = (anim.frameIndex + 1) % frames.length;
                         anim.lastFrameTime = now;
+                        // Play footstep SFX every STEP_INTERVAL run-cycle on this player
+                        tryFootstep(playerState);
                     }
                 }
             } else {
@@ -618,6 +623,29 @@
                     }
                     
                     playerCount.textContent = `Players: ${data.players.length}`;
+                    
+// ---- Server-sent audio events (3D spatial) ----
+                     if (Array.isArray(data.audioEvents)) {
+                         for (const ev of data.audioEvents) {
+                             // Deduplicate by constructing a unique event key
+                             const eventKey = `${ev.playerId}-${ev.type}-${ev.clip || ''}`;
+                             if (consumedAudioEvents.has(eventKey)) continue;
+                             consumedAudioEvents.add(eventKey);
+                             // Allow events from this same player+type to fire again after a short timeout
+                             setTimeout(() => consumedAudioEvents.delete(eventKey), 1000);
+                             
+                             const clip = ev.clip || (ev.type === 'land'  && 'feet thud.wav') ||
+                                                     (ev.type === 'hurt' && 'hurt.mp3') ||
+                                                     (ev.type === 'death' && 'dead.mp3') || null;
+                             if (clip) {
+                                 // Pass isHurt=true for hurt/death sounds to cap their volume
+                                 // Pass isAttack=true for attack sounds to boost their volume
+                                 const isHurt = ev.type === 'hurt' || ev.type === 'death';
+                                 const isAttack = ev.type === 'attack';
+                                 playClipAt(clip, ev.x, ev.y, isHurt, isAttack);
+                             }
+                         }
+                     }
                 }
             };
             
@@ -773,15 +801,21 @@
             // Update animation for all players using server state
             updatePlayerAnimation(player.id, player);
             
-            // Check for landing (transition from air to ground)
+            // Check for landing (transition from air to ground) — 3D thud sound
             const prevStates = playerStates.get(player.id);
             if (prevStates && prevStates.length >= 2) {
                 const prevState = prevStates[prevStates.length - 2];
                 const currState = prevStates[prevStates.length - 1];
                 if (!prevState.onGround && currState.onGround) {
                     triggerLanding(player.id);
+                    // Play landing thud at this player's position (3D spatial)
+                    tryLanding(player);
                 }
             }
+            
+            // Track onGround changes for any later audio hooks
+            const prevGround = _prevOnGround.get(player.id);
+            _prevOnGround.set(player.id, player.onGround);
             
             // Draw health bar above player
             drawHealthBar(player);
@@ -892,10 +926,23 @@
                 }
             }
             
-            // Camera zoom factor - higher values = more zoomed in
-            const CAMERA_ZOOM = 1.3;
-            
-            ctx.save();
+// Camera zoom factor - higher values = more zoomed in
+             const CAMERA_ZOOM = 1.3;
+             
+             // ---- Update 3D audio listener position (local player) ----
+             if (audioCtx && audioManager && localPlayer) {
+                 audioManager.updateListener(localPlayer.x + PLAYER_WIDTH / 2,
+                                              localPlayer.y + PLAYER_HEIGHT / 2);
+                 
+                 // Update camera bounds for screen visibility checks
+                 const viewWorldWidth = canvas.width / CAMERA_ZOOM;
+                 const viewWorldHeight = canvas.height / CAMERA_ZOOM;
+                 audioManager.updateCamera(localPlayer.x - viewWorldWidth / 2,
+                                          localPlayer.y - viewWorldHeight / 2,
+                                          viewWorldWidth, viewWorldHeight);
+             }
+             
+             ctx.save();
             
             // Apply zoom centered on local player
             if (localPlayer) {
@@ -1038,6 +1085,240 @@
 
         // Initialize
         connect();
+
+        // =============================================================
+        // SFX AUDIO SYSTEM — WebAudio with 3D distance rolloff
+        // =============================================================
+
+        let audioCtx = null;
+        let audioManager = null;  // lazy-init once audioCtx is ready
+        const sfxBuffers = {};          // filename → decoded AudioBuffer
+        let sfxLoaded = false;
+        const sfxLoadPromises = [];
+
+        // SFX manifest — maps logical names to actual file names
+        const SFX_MANIFEST = {
+            // Footsteps (one-per-frame variant picker)
+            'step':  ['step.wav',  'step2.wav',  'step3.wav',  'step4.wav'],
+            // Landing / feet thud
+            'land':  ['feet thud.wav'],
+            // Hurt (random 1 of 4)
+            'hurt':  ['hurt.mp3', 'hurt2.mp3', 'hurt3.mp3', 'hurt4.mp3'],
+            // Death
+            'death': ['dead.mp3'],
+// Attack hit sounds mapped by combo stage (0-indexed)
+             // jab=smack, cross=bish, jab2=smack, cross2=bash, kick=spash + extra variations
+             'attack': ['punch1 - smack.wav', 'punch3 - bish.wav',
+                        'punch5 - smack.wav', 'punch4 - bash.wav',
+                        'punch2 - spash.wav', 'punch6 - doosh.wav',
+                        'punch7 - smack.wav', 'punch8 - thud.wav']
+        };
+
+        // Lazy AudioContext init — requires a user gesture (first keypress unlocks it)
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        // Preload all SFX files into AudioBuffers
+        function preloadSfx() {
+            if (sfxLoaded) return;
+            // Resolve AudioContext — either already created or create+resume now
+            initAudio();
+            const ctx = audioCtx;
+            const basePath = 'assets/sfx/';
+            const allFiles = Object.values(SFX_MANIFEST).flat();
+            const uniqueFiles = [...new Set(allFiles)];  // dedupe
+
+            for (const file of uniqueFiles) {
+                sfxLoadPromises.push(
+                    // encodeURIComponent the filename so spaces / special chars don't 404
+                    fetch(basePath + encodeURIComponent(file))
+                        .then(r => {
+                            if (!r.ok) throw new Error(`HTTP ${r.status} for ${file}`);
+                            return r.arrayBuffer();
+                        })
+                        .then(buf => ctx.decodeAudioData(buf))
+                        .then(decoded => { sfxBuffers[file] = decoded; })
+                        .catch(err => console.warn('SFX load failed:', file, err.message))
+                );
+            }
+            return Promise.all(sfxLoadPromises).then(() => {
+                sfxLoaded = true;
+                audioManager = new Audio3DManager(audioCtx);
+            });
+        }
+
+        // Kick off SFX preload as soon as game data arrives (no user gesture needed for fetch/decode,
+        // AudioContext will be lazily resumed on the first keypress)
+        const origCheckLoadingComplete = checkLoadingComplete;
+        checkLoadingComplete = function () {
+            origCheckLoadingComplete();
+            if (gameDataReceived && !sfxLoaded) {
+                preloadSfx();
+            }
+        };
+
+// ---- 3D spatial audio manager ----
+         // Master gain scales all SFX so they never overwhelm game audio
+         // Individual gains encode distance rolloff: 0 dB @ 0 px → -∞ dB @ 2500 px (inverse-square)
+         class Audio3DManager {
+             constructor(ctx) {
+                 this.ctx = ctx;
+                 this.masterGain = ctx.createGain();
+                 this.masterGain.gain.value = 0.55; // Overall SFX level
+                 this.masterGain.connect(ctx.destination);
+
+                 this.LISTENER_X = 0;
+                 this.LISTENER_Y = 0;
+
+                 // Camera bounds for screen visibility (updated each frame)
+                 this.cameraX = 0;
+                 this.cameraY = 0;
+                 this.cameraWidth = 800;
+                 this.cameraHeight = 600;
+                 this.CAMERA_ZOOM = 1.3;
+
+                 // Rolloff parameters (inverse-distance law)
+                 this.ROLLOFF_REF_DIST  = 200;  // px: no attenuation within this radius
+                 this.ROLLOFF_MAX_DIST  = 2500; // px: full attenuation at this radius
+                 this.MAX_GAIN          = 1.0;
+                 this.MIN_GAIN          = 0.001; // ~-60 dB floor (prevents total silence edge-cases)
+
+                 // Audio type multipliers
+                 this.hurtVolumeMultiplier = 0.3; // Hurt sounds are always quieter
+                 this.attackVolumeMultiplier = 1.5; // Attack sounds are louder
+             }
+
+             /** Check if position is on screen */
+             isOnScreen(sx, sy) {
+                 return sx >= this.cameraX && sx <= this.cameraX + this.cameraWidth &&
+                        sy >= this.cameraY && sy <= this.cameraY + this.cameraHeight;
+             }
+
+             /** Update camera bounds for screen visibility checks */
+             updateCamera(cameraX, cameraY, cameraWidth, cameraHeight) {
+                 this.cameraX = cameraX;
+                 this.cameraY = cameraY;
+                 this.cameraWidth = cameraWidth;
+                 this.cameraHeight = cameraHeight;
+             }
+
+/** Panner gain for a sound at world position (sx, sy) → 3D rolloff */
+              calcGain(sx, sy, isHurt = false, isAttack = false) {
+                  const dx   = sx - this.LISTENER_X;
+                  const dy   = sy - this.LISTENER_Y;
+                  const dist = Math.sqrt(dx * dx + dy * dy);
+
+                  // Base distance rolloff
+                  let gain;
+                  if (dist <= this.ROLLOFF_REF_DIST) {
+                      gain = this.MAX_GAIN;
+                  } else {
+                      const t = Math.min(1, (dist - this.ROLLOFF_REF_DIST) / (this.ROLLOFF_MAX_DIST - this.ROLLOFF_REF_DIST));
+                      gain = this.MAX_GAIN * Math.pow(1 - t, 2) + this.MIN_GAIN * (1 - Math.pow(1 - t, 2));
+                  }
+
+                  // Apply hurt volume cap
+                  if (isHurt) {
+                      gain *= this.hurtVolumeMultiplier;
+                  }
+
+                  // Boost attack sounds
+                  if (isAttack) {
+                      gain *= this.attackVolumeMultiplier;
+                  }
+
+                  // Apply screen visibility factor
+                  const onScreen = this.isOnScreen(sx, sy);
+                  if (!onScreen) {
+                      // Off-screen sounds are quieter
+                      gain *= 0.15;
+                  }
+
+                  return gain;
+              }
+
+             /** Update listener (local player) world position */
+             updateListener(x, y) {
+                 this.LISTENER_X = x;
+                 this.LISTENER_Y = y;
+             }
+
+/**
+               * Play a decoded buffer at world position with 3D distance rolloff.
+               * @param {AudioBuffer} buffer   Pre-decoded SFX buffer
+               * @param {number}     sx        World X of the sound source
+               * @param {number}     sy        World Y of the sound source
+               * @param {number}     [startOffset=0]  Optional: start part-way into the buffer
+               * @param {boolean}     [isHurt=false]  Optional: if true, applies hurt volume cap
+               * @param {boolean}     [isAttack=false]  Optional: if true, boosts attack volume
+               */
+              play(buffer, sx, sy, startOffset = 0, isHurt = false, isAttack = false) {
+                  const ctx = this.ctx;
+                  const source = ctx.createBufferSource();
+                  source.buffer = buffer;
+
+                  const gain = ctx.createGain();
+                  gain.gain.value = this.calcGain(sx, sy, isHurt, isAttack);
+                  source.connect(gain);
+                  gain.connect(this.masterGain);
+
+                  source.start(0, startOffset);
+              }
+          }
+
+        // ---- Footstep rotation helpers ----
+        const STEP_FILES = ['step.wav', 'step2.wav', 'step3.wav', 'step4.wav'];
+        let footstepIndex  = 0;
+        let stepTriggerCounter = 0;     // counts frames — play sound every N run-frames
+        const STEP_INTERVAL = 3;        // fire footstep every 3rd running frame (~10 steps/second at 30TPS)
+
+        // ---- Landing sound on onGround transition (client-side) ----
+        const _prevOnGround = new Map(); // playerId → previous onGround state
+
+        // ---- State-listener for audio events broadcast from the server ----
+        const consumedAudioEvents = new Set(); // deduplicate per unique event index
+
+        // Capture the original ws.onmessage to extend it
+        // (we already intercepted it above; we just need to add the audio-events handler there)
+        // Patch: extend the 'state' branch at lines 543-621 of the original onmessage
+
+        // We inject extra logic into the render loop below, after interpolation:
+
+        // ---- Helper: play footsteps when running ----
+        function tryFootstep(player) {
+            initAudio();
+            if (!sfxLoaded || !audioCtx) return;
+            const file = STEP_FILES[footstepIndex % STEP_FILES.length];
+            if (!sfxBuffers[file]) return;
+            footstepIndex++;
+            audioManager.play(sfxBuffers[file], player.x + PLAYER_WIDTH / 2, player.y + PLAYER_HEIGHT);
+        }
+
+        // ---- Helper: play landing sound ----
+        function tryLanding(player) {
+            initAudio();
+            if (!sfxLoaded || !audioCtx) return;
+            const buf = sfxBuffers['feet thud.wav'];
+            if (!buf) return;
+            audioManager.play(buf, player.x + PLAYER_WIDTH / 2, player.y + PLAYER_HEIGHT);
+        }
+
+// ---- Helper: play a named clip at world position ----
+         function playClipAt(clip, sx, sy, isHurt = false, isAttack = false) {
+             initAudio();
+             if (!sfxLoaded || !audioCtx) return;
+             const buf = sfxBuffers[clip];
+             if (!buf) return;
+             audioManager.play(buf, sx, sy, 0, isHurt, isAttack);
+         }
+
         render();
     </script>
 </body>

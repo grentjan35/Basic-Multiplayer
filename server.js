@@ -51,6 +51,9 @@ const WORLD_HEIGHT = 4000;
 // Available character spritesheets
 const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug', 'Boss', 'Distractor Duck', 'Dark Cowboy', 'Racketeer', 'Purple', 'Guard', 'Dock Overseer', 'Hostage', 'Doorman'];
 
+// Per-tick audio events queue (cleared each frame in gameLoop)
+const audioEvents = [];
+
 // Game state - SERVER ONLY
 const players = new Map();
 let platforms = [];
@@ -309,6 +312,33 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    // Static file serving for /assets/***
+    if (req.url.startsWith('/assets/')) {
+        const decodedUrl = decodeURIComponent(req.url);
+        const filePath = path.join(__dirname, decodedUrl);
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes = {
+            '.png':  'image/png',
+            '.jpg':  'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.wav':  'audio/wav',
+            '.mp3':  'audio/mpeg',
+            '.ogg':  'audio/ogg',
+            '.json': 'application/json'
+        };
+        const contentType = mimeTypes[ext] || 'application/octet-stream';
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                res.writeHead(404);
+                res.end('Not found');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(data);
+        });
+        return;
+    }
     
     if (req.url === '/') {
         fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
@@ -631,6 +661,7 @@ function applyPhysics(player) {
 
 // Check collision - SERVER ONLY
 function checkCollision(player) {
+    const wasOnGround = player.onGround;
     player.onGround = false;
     
     const hitboxLeft = player.x + HITBOX_LEFT_INSET;
@@ -658,6 +689,16 @@ function checkCollision(player) {
                     player.y = plat.y - PLAYER_HEIGHT;
                     player.vy = 0;
                     player.onGround = true;
+                    
+                    // Detect landing transition (air → ground)
+                    if (!wasOnGround && player.onGround) {
+                        audioEvents.push({
+                            type: 'land',
+                            playerId: player.id,
+                            x: player.x,
+                            y: player.y
+                        });
+                    }
                 } else {
                     // Hitting from below
                     player.y = plat.y + plat.h;
@@ -807,7 +848,7 @@ function attackHitsPlayer(attackHitbox, player) {
 }
 
 // Apply damage and knockback from an attack
-function applyAttackHit(defender, attackHitbox) {
+function applyAttackHit(defender, attackHitbox, attacker) {
     // Deal damage
     defender.health -= attackHitbox.damage;
     
@@ -824,6 +865,46 @@ function applyAttackHit(defender, attackHitbox) {
     
     // Brief invincibility
     defender.invincibleTimer = 15; // ~0.5 seconds
+    
+    // --- Audio events ---
+    
+    // Queue hurt sound for the defender — random variation from the 4 hurt clips
+    const hurtClips = ['hurt.mp3', 'hurt2.mp3', 'hurt3.mp3', 'hurt4.mp3'];
+    audioEvents.push({
+        type: 'hurt',
+        playerId: defender.id,
+        clip: hurtClips[Math.floor(Math.random() * hurtClips.length)],
+        x: defender.x,
+        y: defender.y
+    });
+    
+    // Queue death sound if the hit kills
+    if (defender.health <= 0) {
+        audioEvents.push({
+            type: 'death',
+            playerId: defender.id,
+            clip: 'dead.mp3',
+            x: defender.x,
+            y: defender.y
+        });
+    }
+    
+    // Queue attack hit sound for the attacker — 8-clip pool covering all attack-confirm events
+    // stage 0=jab→smack  stage 1=cross→bish  stage 2=jab→smack
+    // stage 3=cross→bash  stage 4=kick→spash
+    const attackSfxMap = ['punch1 - smack.wav', 'punch3 - bish.wav',
+                          'punch5 - smack.wav', 'punch4 - bash.wav',
+                          'punch2 - spash.wav',
+                          'punch6 - doosh.wav', 'punch7 - smack.wav', // extra hits
+                          'punch8 - thud.wav'];                       // death-ground thud
+    audioEvents.push({
+        type: 'attack',
+        playerId: attacker.id,
+        clip: attackSfxMap[attackHitbox.stage],
+        x: attacker.x,
+        y: attacker.y,
+        isKick: attackHitbox.stage === 4
+    });
 }
 
 // Kick magnet: pull kick attackers toward the nearest opponent (lunge effect)
@@ -884,6 +965,9 @@ function gameLoop() {
         }
     }
     
+    // Per-tick audio events queue (cleared each frame)
+    audioEvents.length = 0;
+    
     // --- PHASE 1: Collect all active attacks ---
     // Gather attack data before any collision processing
     const activeAttacks = [];
@@ -919,7 +1003,7 @@ function gameLoop() {
             // Check if attack actually hits
             if (attackHitsPlayer(hitbox, defender)) {
                 // Apply the hit
-                applyAttackHit(defender, hitbox);
+                applyAttackHit(defender, hitbox, attacker);
                 
                 // Mark both as used
                 hitThisFrame.add(defenderId);
@@ -990,7 +1074,8 @@ function gameLoop() {
         
         const message = JSON.stringify({
             type: 'state',
-            players: playerStates
+            players: playerStates,
+            audioEvents: audioEvents
         });
         
         for (const [id, { ws }] of players) {
