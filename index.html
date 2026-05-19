@@ -332,8 +332,8 @@
                     if (frames) {
                         anim.frameIndex = (anim.frameIndex + 1) % frames.length;
                         anim.lastFrameTime = now;
-                        // Play footstep SFX every STEP_INTERVAL run-cycle on this player
-                        tryFootstep(playerState);
+                        // Play footstep SFX every dynamic run-cycle on this player
+                        tryFootstepWithInterval(anim, playerState.x, playerState.y);
                     }
                 }
             } else {
@@ -810,6 +810,8 @@
                     triggerLanding(player.id);
                     // Play landing thud at this player's position (3D spatial)
                     tryLanding(player);
+                    // Footstep SFX on landing — counter = threshold so it fires immediately
+                    stepTriggerCounter = stepInterval;
                 }
             }
             
@@ -1276,8 +1278,8 @@
         // ---- Footstep rotation helpers ----
         const STEP_FILES = ['step.wav', 'step2.wav', 'step3.wav', 'step4.wav'];
         let footstepIndex  = 0;
-        let stepTriggerCounter = 0;     // counts frames — play sound every N run-frames
-        const STEP_INTERVAL = 3;        // fire footstep every 3rd running frame (~10 steps/second at 30TPS)
+        let stepTriggerCounter = 0;   // counts run-frames since last sound
+        let stepInterval = 2;         // fire footstep every 2nd run frame
 
         // ---- Landing sound on onGround transition (client-side) ----
         const _prevOnGround = new Map(); // playerId → previous onGround state
@@ -1298,7 +1300,19 @@
             const file = STEP_FILES[footstepIndex % STEP_FILES.length];
             if (!sfxBuffers[file]) return;
             footstepIndex++;
-            audioManager.play(sfxBuffers[file], player.x + PLAYER_WIDTH / 2, player.y + PLAYER_HEIGHT);
+            audioManager.play(sfxBuffers[file],
+                player.x + PLAYER_WIDTH / 2,
+                player.y + PLAYER_HEIGHT);
+        }
+
+        function tryFootstepWithInterval(anim, x, y) {
+            stepTriggerCounter++;
+            if (stepTriggerCounter >= stepInterval) {
+                stepTriggerCounter = 0;
+                audioManager.play(sfxBuffers[STEP_FILES[footstepIndex % STEP_FILES.length]],
+                    x + PLAYER_WIDTH / 2, y + PLAYER_HEIGHT);
+                footstepIndex++;
+            }
         }
 
         // ---- Helper: play landing sound ----
