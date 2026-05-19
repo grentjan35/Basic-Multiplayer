@@ -115,9 +115,32 @@
         let spritesheetLoaded = false;
         const characterImages = {}; // Map of character name -> Image
         
-        // Interpolation system - now mutable for real-time adjustment
-        let INTERPOLATION_DELAY = 75; // ms (optimized for high-end networks, can scale up to 200ms+ for bad networks)
-        const playerStates = new Map(); // Store past states for interpolation
+        // Interpolation system — adaptive delay based on measured network jitter
+        // Server sends at TICK_INTERVAL = 33.3 ms (30 TPS)
+        const TICK_INTERVAL_MS = 33;
+
+        // ── Delay bounds ──────────────────────────────────────────────────────
+        // Minimum possible delay at which the client can always render smoothly
+        // (at least one full tick gap in the buffer is required)
+        const CLIENT_SMOOTH_MIN = 50;   // ms, floor of the playback delay
+
+        // Maximum delay before the game feels physically disconnected to a player
+        // (above ~150 ms even adaptive buffering starts to feel sluggish)
+        const CLIENT_SMOOTH_MAX = 150;  // ms, ceiling of the playback delay
+
+        // ── Smoothing rates ───────────────────────────────────────────────────
+        // Very slow lerp: the estimate moves only ~10 % toward each new sample
+        // per frame — this is what prevents oscillation on jitter spikes
+        const SMOOTH_RATE = 0.1;
+
+        // ── Running state (preserved between frames, never reset) ──────────────
+        let INTERPOLATION_DELAY = CLIENT_SMOOTH_MIN;        // current playback delay
+        let smoothedJitter = 0;                             // EWMA of measured jitter ms
+        let lastAnnounceTime = 0;                           // client receive-time of last msg
+        let prevServerFrame = 0;                            // last frame number seen
+        let rtSamples = [];                                 // rolling RTT samples
+        const RT_SAMPLE_LIMIT = 16;                         // keep ~16 samples ≈ 0.5 s
+        const playerStates = new Map();                     // per-player state history
         
         // Animation state management
         const playerAnimations = new Map(); // Store current animation state for each player
@@ -434,14 +457,14 @@
             return getFrameCoordinates(frameName, characterImage);
         }
 
-        // Interpolate between two states
+        // Interpolate between two states — no snapping (client-authoritative render only)
         function interpolateState(state1, state2, alpha) {
             return {
                 x: state1.x + (state2.x - state1.x) * alpha,
                 y: state1.y + (state2.y - state1.y) * alpha,
                 vx: state1.vx + (state2.vx - state1.vx) * alpha,
                 vy: state1.vy + (state2.vy - state1.vy) * alpha,
-                onGround: state2.onGround,
+                onGround: state2.onGround,       // snap from earliest source
                 color: state1.color,
                 sprite: state1.sprite,
                 health: state1.health,
@@ -449,47 +472,93 @@
                 comboStage: state1.comboStage,
                 attackActive: state1.attackActive,
                 facingRight: state1.facingRight,
-                isDead: state2.isDead,
-                opacity: state2.opacity,
-                isFadingIn: state2.isFadingIn
+                isDead: state2.isDead,           // snap from latest source
+                opacity: state2.opacity,         // fade must use latest known value
+                isFadingIn: state2.isFadingIn    // fade must use latest known value
             };
         }
 
-        // Get interpolated player state
-        function getInterpolatedPlayerState(playerId) {
-            const states = playerStates.get(playerId);
-            if (!states || states.length < 2) {
-                return null;
-            }
+        // Packed snapshot struct emitted by server.gameLoop() every frame
+        function Snapshot(data) {
+            this.serverFrame    = data.frame   || 0;   // monotonically increasing tick
+            this.serverTime     = data.serverTime || Date.now(); // server send-side clock
+            this.clientRecvTime = Date.now();          // client receive-side clock (set on arrival)
+            this.players        = data.players || [];
+        }
 
-            const renderTime = Date.now() - INTERPOLATION_DELAY;
-            
-            // Find two states to interpolate between
-            let prevState = null;
-            let nextState = null;
-            
-            for (let i = 0; i < states.length - 1; i++) {
-                if (states[i].timestamp <= renderTime && states[i + 1].timestamp > renderTime) {
-                    prevState = states[i];
-                    nextState = states[i + 1];
-                    break;
+        // Called on every incoming state message — measures RTT and arrival jitter
+        // then adjusts the playback delay with the result.
+        function updateInterpolationDelay(msg) {
+            const now = Date.now();
+            const snap = new Snapshot(msg);
+
+            // ── RTT: time elapsed since the last received snapshot was recorded ──
+            if (lastAnnounceTime > 0) {
+                const rtt = now - lastAnnounceTime;                  // ≈ round-trip latency + jitter
+                if (rtt > 0 && rtt < 2_000) {                        // reject wild outliers
+                    rtSamples.push(rtt);
+                    if (rtSamples.length > RT_SAMPLE_LIMIT) rtSamples.shift();
+
+                    // ── Jitter: standard deviation of recent RTTs ──────────────
+                    const avgRtt  = rtSamples.reduce((a, b) => a + b, 0) / rtSamples.length;
+                    const variance = rtSamples.reduce((a, b) => a + (b - avgRtt) ** 2, 0)
+                                 / rtSamples.length;
+                    const rawJitter = Math.sqrt(variance);
+
+                    // ── Exponential Moving Average — slow enough to never oscillate
+                    smoothedJitter = smoothedJitter + SMOOTH_RATE * (rawJitter - smoothedJitter);
+
+                    // ── Shift the delay in the direction of the new estimate,
+                    //     but at most 4 ms per frame → ensures no visible snap
+                    //     even when jitter changes abruptly (e.g. switching network)
+                    const targetDelay = CLIENT_SMOOTH_MIN + smoothedJitter;
+                    const clampedTarget = Math.max(CLIENT_SMOOTH_MIN,
+                                                   Math.min(CLIENT_SMOOTH_MAX, targetDelay));
+                    INTERPOLATION_DELAY += Math.sign(clampedTarget - INTERPOLATION_DELAY)
+                                         * Math.min(4, Math.abs(clampedTarget - INTERPOLATION_DELAY));
                 }
             }
-            
-            // If we couldn't find states around render time, use the oldest available
-            if (!prevState && states.length >= 2) {
-                prevState = states[states.length - 2];
-                nextState = states[states.length - 1];
+
+            lastAnnounceTime = now;
+            prevServerFrame  = snap.serverFrame;
+        }
+
+        // Get interpolated player state — always renders from a stable point in
+        // the past that is guaranteed to have two consecutive snapshots around it.
+        function getInterpolatedPlayerState(playerId) {
+            const states = playerStates.get(playerId);
+            if (!states || states.length < 2) return null;
+
+            const renderTime = Date.now() - INTERPOLATION_DELAY;
+
+            // Binary search (states are time-ordered) for the enclosing pair
+            let lo = 0, hi = states.length - 2, best = -1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >>> 1;
+                if (states[mid + 1].timestamp > renderTime) {
+                    best = mid;
+                    hi  = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
             }
-            
-            if (!prevState || !nextState) {
-                return states[states.length - 1];
+
+            if (best < 0) {
+                // Render time is after the newest snapshot — extrapolate from last pair
+                const prev = states[states.length - 2];
+                const next = states[states.length - 1];
+                const alpha = (renderTime - prev.timestamp) / (next.timestamp - prev.timestamp);
+                return interpolateState(prev, next, Math.max(0, Math.min(1, alpha)));
             }
-            
-            // Calculate interpolation alpha
-            const timeDiff = nextState.timestamp - prevState.timestamp;
+
+            const prevState = states[best];
+            const nextState = states[best + 1];
+            const timeDiff  = nextState.timestamp - prevState.timestamp;
+
+            // If both snapshots share the same timestamp (same tick) just snap forward
+            if (timeDiff <= 0) return nextState;
+
             const alpha = (renderTime - prevState.timestamp) / timeDiff;
-            
             return interpolateState(prevState, nextState, Math.max(0, Math.min(1, alpha)));
         }
 
@@ -551,6 +620,8 @@
                         gameDataReceived = true;
                         checkLoadingComplete();
                     }
+                    // Update adaptive interpolation delay from jitter measurements
+                    updateInterpolationDelay(data);
                     // Store state with timestamp for interpolation
                     for (const player of data.players) {
                         if (!playerStates.has(player.id)) {
@@ -608,8 +679,8 @@
                             triggerAttackAnimation(player.id, comboStage);
                         }
                         
-                        // Keep only last 300ms of states (reduced for better memory management)
-                        while (states.length > 0 && timestamp - states[0].timestamp > 300) {
+                        // Keep only last 500ms of states (increased from 300ms for better buffer margin)
+                        while (states.length > 0 && timestamp - states[0].timestamp > 500) {
                             states.shift();
                         }
                     }

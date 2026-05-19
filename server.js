@@ -1074,6 +1074,8 @@ function gameLoop() {
         
         const message = JSON.stringify({
             type: 'state',
+            frame: gameTickCounter,   // monotonic frame count (for per-tick RTT measurement)
+            serverTime: Date.now(),   // server send-side wall-clock (for clock-offset estimation)
             players: playerStates,
             audioEvents: audioEvents
         });
