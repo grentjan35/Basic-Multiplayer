@@ -418,8 +418,9 @@ class Player {
     // Respawn the player
     respawn() {
         this.health = MAX_HEALTH;
-        this.x = 100 + Math.random() * 500;
-        this.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+        const spawn = pickSpawnPosition();
+        this.x = spawn.x;
+        this.y = spawn.y;
         this.vx = 0;
         this.vy = 0;
         this.onGround = false;
@@ -437,11 +438,54 @@ class Player {
     }
 }
 
+// Pick a random valid spawn position across the full map
+// Tiers: ground (40 %), low (30 %), mid (25 %), high (5 %)
+function pickSpawnPosition() {
+    if (platforms.length === 0) {
+        return { x: 100, y: WORLD_HEIGHT - 100 - PLAYER_HEIGHT };
+    }
+
+    const groundY = WORLD_HEIGHT - 100;
+    const ground   = [];
+    const low      = [];
+    const mid      = [];
+    const high     = [];
+
+    for (const p of platforms) {
+        // Uniform random horizontal pick within the platform (20 %–80 % of width)
+        const spawnX = p.x + p.w * (0.2 + Math.random() * 0.6);
+        // 2 px clearance above the platform surface so the player never spawns embedded
+        const spawnY = p.y - PLAYER_HEIGHT - 2;
+
+        if      (p.y >= groundY)                         ground.push({ x: spawnX, y: spawnY });
+        else if (p.y >= WORLD_HEIGHT - 500)              low   .push({ x: spawnX, y: spawnY });
+        else if (p.y >= WORLD_HEIGHT - 1000)             mid   .push({ x: spawnX, y: spawnY });
+        else                                              high  .push({ x: spawnX, y: spawnY });
+    }
+
+    // Weighted tier roll
+    const roll = Math.random() * 100;
+    let pool;
+    if      (roll < 40) pool = ground;
+    else if (roll < 70) pool = low;
+    else if (roll < 95) pool = mid;
+    else                pool = high;
+
+    // Absolute fallback if a tier is empty
+    if (pool.length === 0) pool = ground.length ? ground : [{ x: 100, y: groundY - PLAYER_HEIGHT }];
+
+    const entry = pool[Math.floor(Math.random() * pool.length)];
+    return {
+        x: Math.max(0, Math.min(entry.x, WORLD_WIDTH - PLAYER_WIDTH)),
+        y: entry.y
+    };
+}
+
 // Add new player
 function addPlayer(ws) {
     const id = ++playerIdCounter;
-    // Spawn on top of ground platform
-    const player = new Player(id, 100, WORLD_HEIGHT - 100 - PLAYER_HEIGHT);
+    const spawn = pickSpawnPosition();
+    const player = new Player(id, spawn.x, spawn.y);
     players.set(id, { player, ws });
     
     // Send init with all assets embedded as base64 data URLs (no HTTP requests needed)
@@ -583,8 +627,9 @@ function applyPhysics(player) {
             player.respawn();
         } else {
             // Bot players are plain objects without respawn() method
-            player.x = 100 + Math.random() * 500;
-            player.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+            const spawn = pickSpawnPosition();
+            player.x = spawn.x;
+            player.y = spawn.y;
             player.vx = 0;
             player.vy = 0;
             player.onGround = false;
@@ -624,8 +669,9 @@ function applyPhysics(player) {
                 } else {
                     // Bot players are plain objects without respawn()
                     player.health = 100;
-                    player.x = 100 + Math.random() * 500;
-                    player.y = WORLD_HEIGHT - 100 - PLAYER_HEIGHT - 50;
+                    const spawn = pickSpawnPosition();
+                    player.x = spawn.x;
+                    player.y = spawn.y;
                     player.vx = 0;
                     player.vy = 0;
                     player.onGround = false;
@@ -1049,6 +1095,7 @@ function gameLoop() {
     
     // Send state to all clients (only if there are players)
     if (players.size > 0) {
+        const snapshotTime = Date.now();   // single stable call for this tick
         const playerStates = [];
         for (const [id, { player }] of players) {
             playerStates.push({
@@ -1074,8 +1121,8 @@ function gameLoop() {
         
         const message = JSON.stringify({
             type: 'state',
-            frame: gameTickCounter,   // monotonic frame count (for per-tick RTT measurement)
-            serverTime: Date.now(),   // server send-side wall-clock (for clock-offset estimation)
+            frame: gameTickCounter,
+            snapshotTime,                     // server-side wall-clock at send instant
             players: playerStates,
             audioEvents: audioEvents
         });

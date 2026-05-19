@@ -115,32 +115,28 @@
         let spritesheetLoaded = false;
         const characterImages = {}; // Map of character name -> Image
         
-        // Interpolation system — adaptive delay based on measured network jitter
-        // Server sends at TICK_INTERVAL = 33.3 ms (30 TPS)
-        const TICK_INTERVAL_MS = 33;
+        // Interpolation system — adaptive delay: jitter + queue-depth (localhost + cloud)
+        const TICK_INTERVAL_MS = 33;      // known server tick gap (30 TPS)
 
-        // ── Delay bounds ──────────────────────────────────────────────────────
-        // Minimum possible delay at which the client can always render smoothly
-        // (at least one full tick gap in the buffer is required)
-        const CLIENT_SMOOTH_MIN = 50;   // ms, floor of the playback delay
+        // ── Hard bounds ─────────────────────────────────────────────────────
+        const CLIENT_SMOOTH_MIN = 50;     // ms — never below this
+        const CLIENT_SMOOTH_MAX = 150;    // ms — never above this
 
-        // Maximum delay before the game feels physically disconnected to a player
-        // (above ~150 ms even adaptive buffering starts to feel sluggish)
-        const CLIENT_SMOOTH_MAX = 150;  // ms, ceiling of the playback delay
+        // ── EWMA rates ──────────────────────────────────────────────────────
+        // Jitter signal: 8 %/frame — very slow, tracks only steady trends
+        const SMOOTH_JITTER_RATE  = 0.08;
+        // Queue-depth signal: 30 %/frame — fast, reacts within ~6–10 frames
+        const SMOOTH_QUEUE_RATE   = 0.30;
 
-        // ── Smoothing rates ───────────────────────────────────────────────────
-        // Very slow lerp: the estimate moves only ~10 % toward each new sample
-        // per frame — this is what prevents oscillation on jitter spikes
-        const SMOOTH_RATE = 0.1;
-
-        // ── Running state (preserved between frames, never reset) ──────────────
-        let INTERPOLATION_DELAY = CLIENT_SMOOTH_MIN;        // current playback delay
-        let smoothedJitter = 0;                             // EWMA of measured jitter ms
-        let lastAnnounceTime = 0;                           // client receive-time of last msg
-        let prevServerFrame = 0;                            // last frame number seen
-        let rtSamples = [];                                 // rolling RTT samples
-        const RT_SAMPLE_LIMIT = 16;                         // keep ~16 samples ≈ 0.5 s
-        const playerStates = new Map();                     // per-player state history
+        // ── Running state ───────────────────────────────────────────────────
+        let INTERPOLATION_DELAY     = CLIENT_SMOOTH_MIN;  // current playback delay (ms)
+        let smoothedJitter          = 0;                  // EWMA one-way jitter (ms)
+        let smoothedQueueDepth      = 0;                  // EWMA backlog depth (ms)
+        let lastServerSnapshotTime  = 0;                  // snapshotTime of last processed msg
+        let lastClientArrivalTime   = 0;                  // client-receive time of same msg
+        const rttSampleRing         = [];                 // one-way latency sample ring
+        const RTT_RING_CAP          = 16;                 // ~0.5 s of history at 30 fps
+        const playerStates          = new Map();           // per-player timestamped history
         
         // Animation state management
         const playerAnimations = new Map(); // Store current animation state for each player
@@ -457,14 +453,14 @@
             return getFrameCoordinates(frameName, characterImage);
         }
 
-        // Interpolate between two states — no snapping (client-authoritative render only)
+        // Interpolate between two states — render-authoritative, no client prediction
         function interpolateState(state1, state2, alpha) {
             return {
                 x: state1.x + (state2.x - state1.x) * alpha,
                 y: state1.y + (state2.y - state1.y) * alpha,
                 vx: state1.vx + (state2.vx - state1.vx) * alpha,
                 vy: state1.vy + (state2.vy - state1.vy) * alpha,
-                onGround: state2.onGround,       // snap from earliest source
+                onGround: state2.onGround,
                 color: state1.color,
                 sprite: state1.sprite,
                 health: state1.health,
@@ -472,66 +468,100 @@
                 comboStage: state1.comboStage,
                 attackActive: state1.attackActive,
                 facingRight: state1.facingRight,
-                isDead: state2.isDead,           // snap from latest source
-                opacity: state2.opacity,         // fade must use latest known value
-                isFadingIn: state2.isFadingIn    // fade must use latest known value
+                isDead: state2.isDead,
+                opacity: state2.opacity,
+                isFadingIn: state2.isFadingIn
             };
         }
 
-        // Packed snapshot struct emitted by server.gameLoop() every frame
+        // ── Snapshot ────────────────────────────────────────────────────────
+        // Immutable inbox record for every incoming state message.
+        // Uses server-emitted snapshotTime for stable jitter measurement
+        // (avoids conflating server scheduling variance with network jitter).
         function Snapshot(data) {
-            this.serverFrame    = data.frame   || 0;   // monotonically increasing tick
-            this.serverTime     = data.serverTime || Date.now(); // server send-side clock
-            this.clientRecvTime = Date.now();          // client receive-side clock (set on arrival)
-            this.players        = data.players || [];
+            this.frame           = data.frame         || 0;
+            this.snapshotTime    = data.snapshotTime  || Date.now();
+            this.clientRecvTime  = Date.now();          // stamped at instant of arrival
+            this.players         = data.players       || [];
         }
 
-        // Called on every incoming state message — measures RTT and arrival jitter
-        // then adjusts the playback delay with the result.
+        // ── updateInterpolationDelay ─────────────────────────────────────────
+        // Two-signal system:
+        //   Signal 1 — one-way jitter  : midpoint of server-gap + client-delivery-gap,
+        //                                  de-biased by trimming the middle 70 % of
+        //                                  the sample ring before computing range.
+        //   Signal 2 — queue depth     : how many ms of backlog are accumulating in
+        //                                  the local buffer vs ideal tick spacing.
+        // Both are EWMA-smoothed, independently clamped, then combined into a
+        // single playback-delay value that the render loop reads every frame.
         function updateInterpolationDelay(msg) {
-            const now = Date.now();
             const snap = new Snapshot(msg);
 
-            // ── RTT: time elapsed since the last received snapshot was recorded ──
-            if (lastAnnounceTime > 0) {
-                const rtt = now - lastAnnounceTime;                  // ≈ round-trip latency + jitter
-                if (rtt > 0 && rtt < 2_000) {                        // reject wild outliers
-                    rtSamples.push(rtt);
-                    if (rtSamples.length > RT_SAMPLE_LIMIT) rtSamples.shift();
+            // ── Signal 1: one-way jitter ────────────────────────────────────
+            if (lastServerSnapshotTime > 0) {
+                const serverGap      = snap.snapshotTime  - lastServerSnapshotTime;
+                const deliveryGap    = snap.clientRecvTime - lastClientArrivalTime;
 
-                    // ── Jitter: standard deviation of recent RTTs ──────────────
-                    const avgRtt  = rtSamples.reduce((a, b) => a + b, 0) / rtSamples.length;
-                    const variance = rtSamples.reduce((a, b) => a + (b - avgRtt) ** 2, 0)
-                                 / rtSamples.length;
-                    const rawJitter = Math.sqrt(variance);
+                // No clock sync needed — midpoint is a stable one-way estimate
+                const oneWay = (deliveryGap + serverGap) / 2;
 
-                    // ── Exponential Moving Average — slow enough to never oscillate
-                    smoothedJitter = smoothedJitter + SMOOTH_RATE * (rawJitter - smoothedJitter);
-
-                    // ── Shift the delay in the direction of the new estimate,
-                    //     but at most 4 ms per frame → ensures no visible snap
-                    //     even when jitter changes abruptly (e.g. switching network)
-                    const targetDelay = CLIENT_SMOOTH_MIN + smoothedJitter;
-                    const clampedTarget = Math.max(CLIENT_SMOOTH_MIN,
-                                                   Math.min(CLIENT_SMOOTH_MAX, targetDelay));
-                    INTERPOLATION_DELAY += Math.sign(clampedTarget - INTERPOLATION_DELAY)
-                                         * Math.min(4, Math.abs(clampedTarget - INTERPOLATION_DELAY));
+                // Reject processing spikes (2 ms floor, 2 s ceiling)
+                if (oneWay > 2 && oneWay < 2_000) {
+                    rttSampleRing.push({ oneWay, t: snap.snapshotTime });
+                    if (rttSampleRing.length > RTT_RING_CAP) rttSampleRing.shift();
                 }
             }
+            lastServerSnapshotTime = snap.snapshotTime;
+            lastClientArrivalTime  = snap.clientRecvTime;
 
-            lastAnnounceTime = now;
-            prevServerFrame  = snap.serverFrame;
+            // Compute jitter from the trimmed middle 70 % of the ring
+            // (drops ~15 % worst outliers on each side — far more robust than std-dev)
+            if (rttSampleRing.length >= 4) {
+                const sorted  = [...rttSampleRing].sort((a, b) => a.oneWay - b.oneWay);
+                const drop    = Math.floor(sorted.length * 0.15);
+                const trimmed = sorted.slice(drop, sorted.length - drop);
+                const range   = trimmed[trimmed.length - 1].oneWay - trimmed[0].oneWay;
+                // Half the inter-quartile range ≈ robust standard-deviation proxy
+                const rawJitter = range / 2;
+
+                smoothedJitter += SMOOTH_JITTER_RATE * (rawJitter - smoothedJitter);
+            }
+
+            // ── Signal 2: queue depth ───────────────────────────────────────
+            // Gap between consecutive arrivals vs ideal tick spacing.
+            // Depth accumulates only on slowdown, drains immediately on recovery.
+            const expectedGap      = TICK_INTERVAL_MS;
+            const actualArrivalGap = lastClientArrivalTime > 0
+                ? snap.clientRecvTime - lastClientArrivalTime
+                : expectedGap;
+
+            // Positive = delivery was slower than ideal → backlog growing
+            const depthSample = Math.max(0, expectedGap - actualArrivalGap);
+
+            // Cap contribution so a sustained stall can never push total delay past ~350 ms
+            smoothedQueueDepth += SMOOTH_QUEUE_RATE * (depthSample - smoothedQueueDepth);
+            smoothedQueueDepth  = Math.max(0, smoothedQueueDepth);
+
+            // ── Combine & clamp ─────────────────────────────────────────────
+            const targetDelay = CLIENT_SMOOTH_MIN + smoothedJitter + smoothedQueueDepth;
+            const clamped     = Math.max(CLIENT_SMOOTH_MIN,
+                                         Math.min(CLIENT_SMOOTH_MAX, targetDelay));
+
+            // Step toward target at most 3 ms per frame (~33 frames to reach ceiling)
+            INTERPOLATION_DELAY += Math.sign(clamped - INTERPOLATION_DELAY)
+                                 * Math.min(3, Math.abs(clamped - INTERPOLATION_DELAY));
         }
 
-        // Get interpolated player state — always renders from a stable point in
-        // the past that is guaranteed to have two consecutive snapshots around it.
+        // ── getInterpolatedPlayerState ──────────────────────────────────────
+        // Binary-search the per-player timestamp buffer for the pair of snapshots
+        // that straddle (now − INTERPOLATION_DELAY).
         function getInterpolatedPlayerState(playerId) {
             const states = playerStates.get(playerId);
             if (!states || states.length < 2) return null;
 
             const renderTime = Date.now() - INTERPOLATION_DELAY;
 
-            // Binary search (states are time-ordered) for the enclosing pair
+            // Binary search — states are time-ordered
             let lo = 0, hi = states.length - 2, best = -1;
             while (lo <= hi) {
                 const mid = (lo + hi) >>> 1;
@@ -544,7 +574,7 @@
             }
 
             if (best < 0) {
-                // Render time is after the newest snapshot — extrapolate from last pair
+                // Render time is past the newest snapshot — extrapolate from last pair
                 const prev = states[states.length - 2];
                 const next = states[states.length - 1];
                 const alpha = (renderTime - prev.timestamp) / (next.timestamp - prev.timestamp);
@@ -555,8 +585,7 @@
             const nextState = states[best + 1];
             const timeDiff  = nextState.timestamp - prevState.timestamp;
 
-            // If both snapshots share the same timestamp (same tick) just snap forward
-            if (timeDiff <= 0) return nextState;
+            if (timeDiff <= 0) return nextState; // same-tick edge, avoid div-by-zero
 
             const alpha = (renderTime - prevState.timestamp) / timeDiff;
             return interpolateState(prevState, nextState, Math.max(0, Math.min(1, alpha)));
@@ -679,8 +708,8 @@
                             triggerAttackAnimation(player.id, comboStage);
                         }
                         
-                        // Keep only last 500ms of states (increased from 300ms for better buffer margin)
-                        while (states.length > 0 && timestamp - states[0].timestamp > 500) {
+                        // Keep only last 600 ms of states
+                        while (states.length > 0 && timestamp - states[0].timestamp > 600) {
                             states.shift();
                         }
                     }
