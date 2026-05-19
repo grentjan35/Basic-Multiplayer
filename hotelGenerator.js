@@ -107,8 +107,8 @@ function generateHotel(overrides = {}) {
         // Floor slab (standing surface)
         addPlatform(leftEdge, floorY, buildingWidth, floorThickness);
         
-        // Exterior left wall (skip where doorways are)
-        const leftWallSegments = splitWallForDoorways(0, floorY, buildingWidth, ceilingH, config);
+// Exterior left wall (skip where doorways are)
+        const leftWallSegments = floor === 0 ? splitExteriorForEntrance(floorY, buildingWidth, ceilingH, config) : splitWallForDoorways(0, floorY, buildingWidth, ceilingH, config);
         for (const seg of leftWallSegments) {
             addPlatform(leftEdge - config.wallThickness, seg.y, config.wallThickness, seg.h);
         }
@@ -155,6 +155,22 @@ function splitWallForDoorways(roomIndex, floorY, buildingWidth, ceilingHeight, c
 }
 
 /**
+ * Split exterior wall for main entrance (lobby floor only)
+ */
+function splitExteriorForEntrance(floorY, buildingWidth, ceilingHeight, config) {
+    // Create entrance gap on the left wall (center area)
+    const entranceHeight = 160;
+    const topH = (ceilingHeight - entranceHeight) / 2;
+    return [{
+        y: floorY - ceilingHeight + config.wallThickness,
+        h: topH  // Top wall segment
+    }, {
+        y: floorY - (ceilingHeight - entranceHeight) / 2 + entranceHeight,
+        h: topH  // Bottom wall segment (below entrance)
+    }];
+}
+
+/**
  * Generate interior layout for a floor
  */
 function generateInterior(platforms, config, floor, floorY, ceilingH, theme, addPlatform, isOccupied) {
@@ -175,28 +191,30 @@ function generateInterior(platforms, config, floor, floorY, ceilingH, theme, add
     const isLobby = floor === 0;
     
     // Room divider walls (perpendicular to hallway) - LEFT side
+    const dividerDoorHeight = 100;
+    const dividerDoorTop = 40; // How far below ceiling the door starts
     for (let i = 0; i <= roomsPerSide; i++) {
         const wallX = leftEdge + i * actualRoomWidth;
-        // Only add wall panels (skip doorway position)
-        const doorX = wallX + actualRoomWidth / 2; // Door in center of each room
-        // Create wall segments above/below door
+        // Top wall section (above door)
         addPlatform(
             wallX - wallThickness / 2,
             floorY - ceilingH + wallThickness,
             wallThickness,
-            ceilingH - wallThickness
+            dividerDoorTop - wallThickness
         );
+        // Bottom section removed for door gap - players walk through
     }
     
     // Room divider walls - RIGHT side
     const rightStart = hallwayLeft + hallwayWidth;
     for (let i = 0; i <= roomsPerSide; i++) {
         const wallX = rightStart + i * actualRoomWidth;
+        // Top section only (door gap below)
         addPlatform(
             wallX - wallThickness / 2,
             floorY - ceilingH + wallThickness,
             wallThickness,
-            ceilingH - wallThickness
+            dividerDoorTop - wallThickness
         );
     }
     
@@ -254,8 +272,8 @@ function createHallwayWallWithDoors(platforms, config, floor, floorY, ceilingH,
     wallX, leftEdge, rightStart, side, roomsPerSide, actualRoomWidth, addPlatform) {
     
     const { wallThickness } = getConfig(config);
-    const doorWidth = 32;
-    const doorHeight = 50;
+    const doorWidth = 80;
+    const doorHeight = 70;
     
     // Wall segments: [y, h] pairs for solid sections
     const segments = [];
@@ -434,7 +452,15 @@ function generateRoof(platforms, config, addPlatform) {
  * Generate exterior features (balconies)
  */
 function generateExterior(platforms, config, addPlatform) {
-    const { leftEdge, worldY, buildingWidth, floorCount, floorHeight } = getConfig(config);
+    const { leftEdge, worldY, buildingWidth, floorCount, floorHeight, wallThickness } = getConfig(config);
+    
+    // Entrance platform outside the door
+    addPlatform(
+        leftEdge - wallThickness - 40,
+        worldY + floorCount - 100,
+        50,
+        8
+    );
     
     for (let floor = 1; floor < floorCount; floor++) {
         if (floor % 2 === 0) continue;
