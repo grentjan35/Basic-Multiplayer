@@ -1306,6 +1306,7 @@
         }
 
         function tryFootstepWithInterval(anim, x, y) {
+            if (!audioManager || !sfxLoaded) return;
             stepTriggerCounter++;
             if (stepTriggerCounter >= stepInterval) {
                 stepTriggerCounter = 0;
@@ -1327,7 +1328,7 @@
 // ---- Helper: play a named clip at world position ----
          function playClipAt(clip, sx, sy, isHurt = false, isAttack = false) {
              initAudio();
-             if (!sfxLoaded || !audioCtx) return;
+             if (!audioManager || !sfxLoaded || !audioCtx) return;
              const buf = sfxBuffers[clip];
              if (!buf) return;
              audioManager.play(buf, sx, sy, 0, isHurt, isAttack);
