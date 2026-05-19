@@ -2,8 +2,8 @@
 // Handles bot spawning, pathfinding, platform navigation, vision, and combat
 
 // ============================================================
-    // CONSTANTS
-    // ============================================================
+//     // CONSTANTS
+//     // ============================================================
     const BOT_VIEW_DISTANCE = 1000; // pixels (~25 game units)
     const BOT_FOV_DEGREES = 120; // field of view in degrees
     const BOT_ATTACK_RANGE = 70; // px - proximity to trigger attack (increased for earlier attacks)
@@ -15,6 +15,10 @@
     const MAX_HORIZONTAL_JUMP_DIST = 500; // px - max horizontal distance for a jump
     const MAX_DROP_DIST = 300; // px - max distance to consider dropping down
     const BOT_PERSONALITIES = ['aggressive', 'cautious', 'fast', 'balanced'];
+    const PLAYER_WIDTH = 40;
+    const PLAYER_HEIGHT = 60;
+    const HITBOX_LEFT_INSET = 14;
+    const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET;
 
 // ============================================================
 // PLATFORM GRAPH - Navigation graph for pathfinding
@@ -236,6 +240,19 @@ function isAbovePlatform(px, py, platform) {
            py > platform.y - 200;
 }
 
+// Check if two players are physically overlapping (body contact)
+function playersAreColliding(a, b) {
+    const aLeft = a.x + HITBOX_LEFT_INSET;
+    const aRight = aLeft + HITBOX_WIDTH;
+    const bLeft = b.x + HITBOX_LEFT_INSET;
+    const bRight = bLeft + HITBOX_WIDTH;
+
+    return aRight > bLeft &&
+           aLeft < bRight &&
+           a.y + PLAYER_HEIGHT > b.y &&
+           a.y < b.y + PLAYER_HEIGHT;
+}
+
 // ============================================================
 // VISION SYSTEM
 // ============================================================
@@ -344,6 +361,8 @@ class BotAI {
         this.revengeTargetId = null;
         this.revengeTimer = 0;
         this.recentHitByIds = [];
+        this.botHitCounter = 0;
+        this.botHitTargetId = null;
 
         // Personality modifiers
         switch (personality) {
@@ -436,6 +455,28 @@ class BotAI {
             }
         }
 
+        // --- Bot-vs-bot multi-hit escalation: track cumulative hits from other bots ---
+        if (botPlayer.gotHit) {
+            for (const [id, { player }] of playerMap) {
+                if (id === this.playerId || player.isDead || !player.isBot) continue;
+                // Within a 3× attack-radius to confirm it was a recent bot hit
+                var bx = player.x - botPlayer.x, by = player.y - botPlayer.y;
+                if (Math.sqrt(bx * bx + by * by) <= BOT_ATTACK_RANGE * 3) {
+                    if (this.botHitTargetId !== id) {
+                        this.botHitTargetId = id;
+                        this.botHitCounter = 1;
+                    } else {
+                        this.botHitCounter++;
+                    }
+                    // After 2-3 confirmed bot hits, register as genuine revenge target
+                    if (this.botHitCounter >= 3) {
+                        this.registerHitBy(id);
+                    }
+                    break;
+                }
+            }
+        }
+
         // --- Revenge override: if someone hit us recently, hunt them first ---
         if (this.recentHitByIds.length > 0) {
             var revengeTargetId = this.recentHitByIds[0];
@@ -446,6 +487,9 @@ class BotAI {
                 this.state = 'CHASE';
             }
         }
+
+        // --- Body contact: if we are touching a human player, attack them immediately ---
+        this.checkContactTargets(botPlayer, playerMap);
 
         // --- State Machine ---
         const visibleTarget = this.assessThreats(botPlayer, playerMap, platforms);
@@ -591,22 +635,16 @@ class BotAI {
         var bestHumanScore = Infinity;
         if (closestHuman) {
             var humanScore = scoreTarget(closestHuman, 0);
-            var botsOnHuman = targetCounts.get(closestHuman.id) || 0;
-            if (botsOnHuman < 3) {
-                bestHumanScore = humanScore;
-                selectedHuman = closestHuman;
-            }
+            bestHumanScore = humanScore;
+            selectedHuman = closestHuman;
         }
 
         var selectedBot = null;
         var bestBotScore = Infinity;
         if (closestTarget) {
             var botScore = scoreTarget(closestTarget, 200);
-            var botsOnBot = targetCounts.get(closestTarget.id) || 0;
-            if (botsOnBot < 3) {
-                bestBotScore = botScore;
-                selectedBot = closestTarget;
-            }
+            bestBotScore = botScore;
+            selectedBot = closestTarget;
         }
 
         // ---- PASS 4: decide final target ----
@@ -635,6 +673,20 @@ class BotAI {
         this.revengeTimer = 90;
         this.lastAttackTime = Date.now();
         this.attackActive = false;
+    }
+
+    // Check for physical body contact with any player (human or bot)
+    // If this bot bumps into or is bumped by a bot, it will attack
+    checkContactTargets(botPlayer, playerMap) {
+        for (const [id, { player }] of playerMap) {
+            if (id === this.playerId || player.isDead) continue;
+            if (playersAreColliding(botPlayer, player)) {
+                this.targetPlayerId = id;
+                this.targetLockTimer = 120; // hold target for 4 seconds on contact
+                this.state = 'ATTACK';
+                return;
+            }
+        }
     }
 
     canAttackTarget(botPlayer, targetPlayer, platforms) {
@@ -1388,6 +1440,8 @@ class BotAI {
         this.revengeTargetId = null;
         this.revengeTimer = 0;
         this.recentHitByIds = [];
+        this.botHitCounter = 0;
+        this.botHitTargetId = null;
     }
 }
 
@@ -1608,23 +1662,23 @@ function updateBotAI(players, platforms, worldWidth, worldHeight, currentTick) {
     const humanCount = getHumanPlayerCount(players);
     const currentBotCount = getBotCount(players);
 
-    if (humanCount === 0 && currentBotCount < 10) {
+    if (humanCount === 0 && currentBotCount < 4) {
         // Spawn missing bots
-        for (let i = currentBotCount; i < 10; i++) {
+        for (let i = currentBotCount; i < 4; i++) {
             const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
             // Add to players map
             const ws = null; // bots don't have WebSocket
             players.set(botPlayer.id, { player: botPlayer, ws });
         }
-        console.log(`Spawned ${10 - currentBotCount} bots (no human players)`);
-    } else if (humanCount > 0 && currentBotCount < 10) {
+        console.log(`Spawned ${4 - currentBotCount} bots (no human players)`);
+    } else if (humanCount > 0 && currentBotCount < 4) {
         // Keep bots for practice even when human players are present
-        for (let i = currentBotCount; i < 10; i++) {
+        for (let i = currentBotCount; i < 4; i++) {
             const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
             const ws = null;
             players.set(botPlayer.id, { player: botPlayer, ws });
         }
-        console.log(`Spawned ${10 - currentBotCount} bots alongside human players`);
+        console.log(`Spawned ${4 - currentBotCount} bots alongside human players`);
     }
 
     // Update each bot's AI

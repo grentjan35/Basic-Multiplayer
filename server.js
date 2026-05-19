@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const botAI = require('./botAI');
+const hotelGen = require('./hotelGenerator');
 
 // Server configuration
 const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
@@ -112,144 +113,92 @@ function loadAssets() {
     console.log(`Loaded ${Object.keys(characterImages).length} character images via base64`);
 }
 
-// Initialize platforms - huge map with multiple height tiers
+// Initialize platforms - hotel-centric world
 function initPlatforms() {
     platforms = [];
     
     // =========================================================
-    // GROUND FLOOR - Full width across entire world
+    // GROUND - Full width across entire world
     // =========================================================
     platforms.push({ x: 0, y: WORLD_HEIGHT - 100, w: WORLD_WIDTH, h: 100 });
     
     // =========================================================
-    // TIER 1: Low platforms (just above ground) - wide, easy
+    // PROCEDURAL HOTEL (center of map)
+    // Generates a complete 6-story hotel with:
+    //   - Ground floor: Lobby with reception, pool, bar, restaurant
+    //   - Floors 2-3: Guest rooms with beds and desks
+    //   - Floor 4: Executive suites with bar
+    //   - Floors 5-6: Penthouse levels with pools and bars
+    //   - Full staircases connecting all floors
+    //   - Exterior balconies
+    //   - Rooftop area with railings
     // =========================================================
-    for (let x = 200; x < WORLD_WIDTH; x += 500) {
-        const plat = { x, y: WORLD_HEIGHT - 180, w: 150, h: 20 };
+    const hotelPlatforms = hotelGen.generateHotel({
+        buildingWidth: 1600,
+        floorCount: 6,
+        floorHeight: 280,
+        hallwayWidth: 120,
+        roomWidth: 150,
+        worldX: 2500,
+        worldY: 120
+    });
+    
+    for (const plat of hotelPlatforms) {
         platforms.push(plat);
-        // Add a small stepping platform next to each for easier climbing
-        if (x + 300 < WORLD_WIDTH) {
-            platforms.push({ x: x + 250, y: WORLD_HEIGHT - 260, w: 80, h: 20 });
-        }
     }
-
+    
     // =========================================================
-    // TIER 2: Mid-low platforms (y: 3000-3600) - generous spacing
+    // SURROUNDING PLATFORMS - around the hotel
+    // Provides access routes to different hotel floors
     // =========================================================
-    for (let x = 50; x < WORLD_WIDTH; x += 400) {
-        const y = 3000 + Math.floor(x / 400) % 2 * 150;
-        const plat = { x, y, w: 180, h: 20 };
-        // Simple overlap check
+    
+    // Connection bridges to hotel left side (from edges of map)
+    for (let y = 3600; y > 200; y -= 300) {
+        const bridgeX = 2200;
+        const bridgeW = 200;
+        // Check if overlaps with hotel
         let overlaps = false;
         for (const p of platforms) {
-            if (x < p.x + p.w + 120 && x + plat.w > p.x - 120 &&
-                y < p.y + p.h + 120 && y + plat.h > p.y - 120) {
+            if (bridgeX < p.x + p.w + 30 && bridgeX + bridgeW > p.x - 30 &&
+                y < p.y + p.h + 30 && y + bridgeW > p.y - 30) {
                 overlaps = true;
                 break;
             }
         }
-        if (!overlaps) platforms.push(plat);
+        if (!overlaps) {
+            platforms.push({ x: bridgeX, y, w: bridgeW, h: 16 });
+        }
     }
-
-    // =========================================================
-    // TIER 3: Mid platforms (y: 2300-2900) - balanced
-    // =========================================================
-    for (let x = 100; x < WORLD_WIDTH; x += 350) {
-        const y = 2300 + Math.floor(x / 350) % 3 * 100;
-        const plat = { x, y, w: 140, h: 20 };
+    
+    // Connection bridges to hotel right side
+    for (let y = 3600; y > 200; y -= 300) {
+        const bridgeX = 2600;
+        const bridgeW = 200;
         let overlaps = false;
         for (const p of platforms) {
-            if (x < p.x + p.w + 100 && x + plat.w > p.x - 100 &&
-                y < p.y + p.h + 100 && y + plat.h > p.y - 100) {
+            if (bridgeX < p.x + p.w + 30 && bridgeX + bridgeW > p.x - 30 &&
+                y < p.y + p.h + 30 && y + bridgeW > p.y - 30) {
                 overlaps = true;
                 break;
             }
         }
-        if (!overlaps) platforms.push(plat);
-    }
-
-    // =========================================================
-    // TIER 4: Mid-high platforms (y: 1600-2200) - tighter
-    // =========================================================
-    for (let x = 150; x < WORLD_WIDTH; x += 400) {
-        const y = 1600 + Math.floor(x / 400) % 4 * 80;
-        const plat = { x, y, w: 120, h: 20 };
-        let overlaps = false;
-        for (const p of platforms) {
-            if (x < p.x + p.w + 90 && x + plat.w > p.x - 90 &&
-                y < p.y + p.h + 90 && y + plat.h > p.y - 90) {
-                overlaps = true;
-                break;
-            }
+        if (!overlaps) {
+            platforms.push({ x: bridgeX, y, w: bridgeW, h: 16 });
         }
-        if (!overlaps) platforms.push(plat);
     }
-
+    
     // =========================================================
-    // TIER 5: High platforms (y: 1000-1500) - sparse
+    // OUTER TOWERS / STRUCTURES on left and right sides
     // =========================================================
-    for (let x = 200; x < WORLD_WIDTH; x += 500) {
-        const y = 1000 + Math.floor(x / 500) % 3 * 120;
-        const plat = { x, y, w: 100, h: 20 };
-        let overlaps = false;
-        for (const p of platforms) {
-            if (x < p.x + p.w + 80 && x + plat.w > p.x - 80 &&
-                y < p.y + p.h + 80 && y + plat.h > p.y - 80) {
-                overlaps = true;
-                break;
-            }
-        }
-        if (!overlaps) platforms.push(plat);
-    }
-
-    // =========================================================
-    // TIER 6: Very high platforms (y: 500-900) - very sparse
-    // =========================================================
-    for (let x = 300; x < WORLD_WIDTH; x += 600) {
-        const y = 500 + Math.floor(x / 600) % 3 * 100;
-        const plat = { x, y, w: 80, h: 20 };
-        let overlaps = false;
-        for (const p of platforms) {
-            if (x < p.x + p.w + 80 && x + plat.w > p.x - 80 &&
-                y < p.y + p.h + 80 && y + plat.h > p.y - 80) {
-                overlaps = true;
-                break;
-            }
-        }
-        if (!overlaps) platforms.push(plat);
-    }
-
-    // =========================================================
-    // TIER 7: Sky platforms near the top (y: 100-400) - tiny
-    // =========================================================
-    for (let x = 400; x < WORLD_WIDTH; x += 700) {
-        const y = 100 + Math.floor(x / 700) % 2 * 100;
-        const plat = { x, y, w: 60, h: 20 };
-        let overlaps = false;
-        for (const p of platforms) {
-            if (x < p.x + p.w + 70 && x + plat.w > p.x - 70 &&
-                y < p.y + p.h + 70 && y + plat.h > p.y - 70) {
-                overlaps = true;
-                break;
-            }
-        }
-        if (!overlaps) platforms.push(plat);
-    }
-
-    // =========================================================
-    // STAIRCASE TOWERS: Vertical climbing structures
-    // Four towers at x = 800, 2000, 3200, 4400
-    // =========================================================
-    const towerPositions = [800, 2000, 3200, 4400];
+    const towerPositions = [600, 4400];
     for (const towerX of towerPositions) {
-        for (let y = WORLD_HEIGHT - 350; y > 200; y -= 280) {
-            // Stagger left-right for climbing
-            const offsetX = ((WORLD_HEIGHT - 350 - y) / 280) % 2 === 0 ? 0 : 100;
-            const plat = { x: towerX + offsetX, y, w: 120, h: 20 };
+        for (let y = WORLD_HEIGHT - 200; y > 500; y -= 260) {
+            const offsetX = Math.floor((WORLD_HEIGHT - 200 - y) / 260) % 2 === 0 ? 0 : 60;
             let overlaps = false;
+            const plat = { x: towerX + offsetX, y, w: 100, h: 16 };
             for (const p of platforms) {
-                if (plat.x < p.x + p.w + 50 && plat.x + plat.w > p.x - 50 &&
-                    y < p.y + p.h + 50 && y + plat.h > p.y - 50) {
+                if (plat.x < p.x + p.w + 30 && plat.x + plat.w > p.x - 30 &&
+                    y < p.y + p.h + 30 && y + plat.h > p.y - 30) {
                     overlaps = true;
                     break;
                 }
@@ -257,38 +206,19 @@ function initPlatforms() {
             if (!overlaps) platforms.push(plat);
         }
     }
-
+    
     // =========================================================
-    // BRIDGE PLATFORMS: Long horizontal strips at key heights
+    // RANDOM FILLER PLATFORMS - ensures map is not too sparse
     // =========================================================
-    const bridgeHeights = [3700, 3100, 2500, 1900, 1300, 700];
-    for (const y of bridgeHeights) {
-        for (let x = 200; x < WORLD_WIDTH - 300; x += 800) {
-            const plat = { x, y, w: 300, h: 20 };
-            let overlaps = false;
-            for (const p of platforms) {
-                if (x < p.x + p.w + 100 && x + plat.w > p.x - 100 &&
-                    y < p.y + p.h + 100 && y + plat.h > p.y - 100) {
-                    overlaps = true;
-                    break;
-                }
-            }
-            if (!overlaps) platforms.push(plat);
-        }
-    }
-
-    // =========================================================
-    // ADDITIONAL RANDOM PLATFORMS - fill gaps
-    // =========================================================
-    for (let i = 0; i < 200; i++) {
-        const x = Math.random() * (WORLD_WIDTH - 300);
-        const y = 100 + Math.random() * (WORLD_HEIGHT - 400);
-        const w = 60 + Math.random() * 120;
-        const h = 20;
+    for (let i = 0; i < 150; i++) {
+        const x = 50 + Math.random() * (WORLD_WIDTH - 400);
+        const y = 200 + Math.random() * (WORLD_HEIGHT - 500);
+        const w = 60 + Math.random() * 100;
+        const h = 16;
         
         let overlaps = false;
         for (const plat of platforms) {
-            const buffer = 100;
+            const buffer = 50;
             if (x < plat.x + plat.w + buffer &&
                 x + w > plat.x - buffer &&
                 y < plat.y + plat.h + buffer &&
@@ -302,8 +232,18 @@ function initPlatforms() {
             platforms.push({ x, y, w, h });
         }
     }
-
-    console.log(`Initialized ${platforms.length} platforms across the world`);
+    
+    // =========================================================
+    // GROUND-LEVEL ACCESS PLATFORMS near hotel entrances
+    // =========================================================
+    // Front entrance
+    platforms.push({ x: 2300, y: WORLD_HEIGHT - 180, w: 400, h: 16 });
+    // Left approach
+    platforms.push({ x: 1800, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
+    // Right approach
+    platforms.push({ x: 3000, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
+    
+    console.log(`Initialized ${platforms.length} platforms across the world (${platforms.length - 12} from hotel generator)`);
 }
 
 // Create HTTP server for serving static files
@@ -387,6 +327,7 @@ class Player {
         this.attackActive = false; // is attack hitbox currently active
         this.attackEndTime = 0; // tick count when attack expires
         this.facingRight = true; // which direction the player is facing
+        this.kickLungeApplied = false; // track if kick lunge has been applied (one-shot)
         
         // Health system
         this.health = MAX_HEALTH;
@@ -569,9 +510,10 @@ function applyPhysics(player) {
         player.fastFallTicks = 0;
     }
     
-    // Process attack input (only once per press, not every tick while held)
+        // Process attack input (only once per press, not every tick while held)
     // Only process attack if player is not dead
     if (!player.isDead && player.inputs.attack && !player.attackProcessed) {
+        const wasKick = player.comboStage === 5; // check if we were already at kick
         player.attackProcessed = true;
         // Check combo timing
         const now = Date.now();
@@ -590,6 +532,29 @@ function applyPhysics(player) {
         player.attackActive = true;
         player.attackEndTime = now + ATTACK_ACTIVE_TIME;
         player.lastAttackTime = now;
+        
+        // Kick lunge: applied ONCE when kick (stage 5) activates
+        // Applied HERE (during physics) so velocity affects position update THIS tick
+        if (player.comboStage === 5 && !wasKick) {
+            // Check if there's an opponent within 300px in front of the attacker
+            let hasOpponentInFront = false;
+            for (const [oid, { player: other }] of players) {
+                if (oid === player.id) continue;
+                const dx = (other.x + PLAYER_WIDTH / 2) - (player.x + PLAYER_WIDTH / 2);
+                if (player.facingRight && dx <= 0) continue;
+                if (!player.facingRight && dx >= 0) continue;
+                const dy = (other.y + PLAYER_HEIGHT / 2) - (player.y + PLAYER_HEIGHT / 2);
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 300) { hasOpponentInFront = true; break; }
+            }
+            // One-shot forward thrust: 16 velocity = ~100px lunge, quickly decays via air resistance
+            // Much gentler than old code that applied 8-10 velocity EVERY tick
+            player.vx = player.facingRight ? 16 : -16;
+            // If opponent is close, add a tiny vertical lunge for combat feel
+            if (hasOpponentInFront) {
+                player.vy -= 2; // slight upward pop
+            }
+        }
     }
     
     // Deactivate attack if expired
@@ -953,33 +918,9 @@ function applyAttackHit(defender, attackHitbox, attacker) {
     });
 }
 
-// Kick magnet: pull kick attackers toward the nearest opponent (lunge effect)
+// Kick lunge is now handled inside applyPhysics() at attack activation time.
+// This function is kept as a no-op to avoid breaking the game loop call.
 function applyKickMagnet() {
-    for (const [id, { player }] of players) {
-        // Only pull when kick attack (stage 5) is active
-        if (player.comboStage === 5 && player.attackActive) {
-            let nearestDist = Infinity;
-            let nearestPlayer = null;
-            
-            for (const [oid, { player: other }] of players) {
-                if (oid === id) continue;
-                const dx = other.x - player.x;
-                const dy = (other.y + PLAYER_HEIGHT / 2) - (player.y + PLAYER_HEIGHT / 2);
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < nearestDist) {
-                    nearestDist = dist;
-                    nearestPlayer = other;
-                }
-            }
-            
-            if (nearestPlayer) {
-                const dx = nearestPlayer.x - player.x;
-                const dir = dx > 0 ? 1 : -1;
-                // Strong pull toward opponent (lunge) — does NOT override facing direction
-                player.vx += dir * 2.5;
-            }
-        }
-    }
 }
 
 // Performance monitoring
