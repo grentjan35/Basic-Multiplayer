@@ -10,8 +10,7 @@
     const BOT_CHASE_RANGE = 800; // px - distance to start/stop chasing
     const BOT_STUCK_TIMEOUT = 90; // ticks (3 sec at 30 TPS) before path recalc
     const BOT_PLATFORM_FAIL_TIMEOUT = 60; // ticks before giving up on a platform jump
-const MAX_SINGLE_JUMP_HEIGHT = 160; // px - max height reachable with single jump
-const MAX_DOUBLE_JUMP_HEIGHT = 380; // px - max height reachable with double jump
+const MAX_SINGLE_JUMP_HEIGHT = 380; // px - max height reachable with jump
 const MAX_HORIZONTAL_JUMP_DIST = 800; // px - max horizontal distance for a jump
 const WORLD_HEIGHT = 4000;  // must match server.js
 const GROUND_EDGE_Y = WORLD_HEIGHT - 350;  // y-coord below which any platform counts as a "ground" base
@@ -64,9 +63,9 @@ function buildPlatformGraph(platforms) {
                     if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !isBlockedVertical(platforms, a, b)) {
                         const cost = 3 + heightDiff / 50 + centerDist / 300;
                         graph[i].push({ to: j, action: 'jump', cost });
-                    } else if (heightDiff <= MAX_DOUBLE_JUMP_HEIGHT && !isBlockedVertical(platforms, a, b)) {
+                    } else if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !isBlockedVertical(platforms, a, b)) {
                         const cost = 5 + heightDiff / 50 + centerDist / 200;
-                        graph[i].push({ to: j, action: 'double_jump', cost });
+                        graph[i].push({ to: j, action: 'jump', cost });
                     }
                 } else if (a.y < b.y) {
                     // a is above b: drop down connection
@@ -91,9 +90,8 @@ function buildPlatformGraph(platforms) {
                     const nearestEdgeX = b.x > aRight ? b.x : b.x + b.w; // edge that is "outward" relative to the lower platform
                     const throwDist = Math.sqrt(Math.pow(nearestEdgeX - aRight, 2) + Math.pow(b.y - a.y, 2));
                     if (throwDist < MAX_HORIZONTAL_JUMP_DIST && !isBlockedVertical(platforms, a, b)) {
-                        const isDouble = (a.y - b.y) > MAX_SINGLE_JUMP_HEIGHT;
-                        const action = isDouble ? 'double_jump' : 'jump';
-                        const cost = (isDouble ? 5 : 3) + throwDist / 200;
+                        const action = 'jump';
+                        const cost = 5 + throwDist / 200;
                         graph[i].push({ to: j, action, cost });
                     }
                 }
@@ -522,6 +520,11 @@ class BotAI {
         this.botHitCounter = 0;
         this.botHitTargetId = null;
 
+        // NEW: Bot collision avoidance tracking
+        this.botCollisionTimer = 0;
+        this.collidingBotIds = [];
+        this.lastCollisionCheck = 0;
+
         // Momentum tracking
         this.momentumState = 'NONE'; // NONE, BACKING_UP, SPRINTING, JUMPING
         this.momentumTimer = 0;
@@ -570,6 +573,10 @@ class BotAI {
     // Main update - called each tick
     update(botPlayer, playerMap, platforms, worldWidth, worldHeight, currentTick) {
         if (!botPlayer || botPlayer.isDead) return;
+
+        // Store global references for collision avoidance
+        global.currentPlayerMap = playerMap;
+        global.currentPlatforms = platforms;
 
         // Store debug info
         this.debugInfo = `${this.state} | `;
@@ -844,11 +851,31 @@ class BotAI {
      checkContactTargets(botPlayer, playerMap) {
          for (const [id, { player }] of playerMap) {
              if (id === this.playerId || player.isDead || player.isSpectator) continue;
+             
+             // Check for direct collision
              if (playersAreColliding(botPlayer, player)) {
                  this.targetPlayerId = id;
                  this.targetLockTimer = 120; // hold target for 4 seconds on contact
                  this.state = 'ATTACK';
                  return;
+             }
+             
+             // NEW: Check for prolonged proximity with other bots (stuck together)
+             if (player.isBot) {
+                 const dx = Math.abs(player.x - botPlayer.x);
+                 const dy = Math.abs(player.y - botPlayer.y);
+                 
+                 // If bots are very close and have been colliding
+                 if (dx < 50 && dy < 30 && this.collidingBotIds.includes(id)) {
+                     // If we've been stuck with this bot for a while, attack them
+                     if (this.botCollisionTimer > 45) { // 1.5 seconds
+                         this.targetPlayerId = id;
+                         this.targetLockTimer = 90;
+                         this.state = 'ATTACK';
+                         this.debugInfo += 'STUCK_FIGHT ';
+                         return;
+                     }
+                 }
              }
          }
      }
@@ -915,74 +942,365 @@ class BotAI {
         }
 
         // If the chased target is a real player object, check if they're airborne.
-        // When the player is in mid-air, hold position on the current platform.
+        // When the player is in mid-air, predict where they'll land and move there
         if (target.isBot === false && !target.onGround) {
-            // Target is airborne — hold position and wait for them to land
-            botPlayer.inputs.right = false;
-            botPlayer.inputs.left = false;
-            this.state = 'PATROL';
-            this.debugInfo += 'WAIT_FOR_LAND';
-            return;
-        }
-
-        // Detect if both on full-width or bottom-of-world base
-        const botOnGround = this.isGroundPlatform(botPlayer, platforms);
-
-        // ================================================================
-        // FIX: Use robust target platform detection instead of simple ground check
-        // The player may be on any elevated platform, not just ground
-        // ================================================================
-        const targetPlatIdx = findTargetPlatform(target.x, target.y, platforms);
-        const targetOnGround = targetPlatIdx >= 0 ? this.isGroundPlatformByIndex(targetPlatIdx, platforms) : false;
-
-        // Clamp chase target so the bot stops at combat distance
-        target = this.getCombatTarget(botPlayer, target);
-
-        // ================================================================
-        // FIX: Remove the old ground bypass that just ran toward target X/Y.
-        // Instead, always use graph-based pathfinding to find a navigable
-        // route to the player's elevation. If graph fails, use the new
-        // vertical route finder to discover intermediate platforms.
-        // ================================================================
-
-        // Always use pathfinding for elevated targets to find a climbable route
-        this.pathfindToTarget(botPlayer, target.x, target.y, platforms);
-
-        // If direct pathfinding failed to produce a meaningful path to an elevated target,
-        // try finding an intermediate climbing route through the platform graph
-        if (this.path.length <= 1) {
-            const botPlat = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
-            if (botPlat >= 0 && targetPlatIdx >= 0) {
-                const botPlatY = platforms[botPlat].y;
-                const targetPlatY = platforms[targetPlatIdx].y;
-
-                // Target is significantly above bot — find a vertical climb route
-                if (targetPlatY < botPlatY - MAX_SINGLE_JUMP_HEIGHT) {
-                    const climbPath = this.findVerticalClimbPath(botPlayer, platforms, botPlat, targetPlatIdx, target.x, target.y);
-                    if (climbPath && climbPath.length > 0) {
-                        this.path = climbPath;
-                        this.pathIndex = 0;
-                        this.debugInfo += 'CLIMB_PATH! ';
-                    }
+            const predictedLanding = this.predictPlayerLanding(target, platforms);
+            if (predictedLanding) {
+                target = predictedLanding;
+                this.debugInfo += 'PREDICT_LAND ';
+            } else {
+                // Can't predict landing, move to their current X but stay on our platform
+                const botPlat = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+                if (botPlat >= 0) {
+                    const plat = platforms[botPlat];
+                    const clampedX = Math.max(plat.x + 20, Math.min(plat.x + plat.w - 20, target.x));
+                    this.moveToward(botPlayer, clampedX, platforms);
+                    this.debugInfo += 'WAIT_LAND';
+                    return;
                 }
             }
         }
 
-        // Follow path
-        if (this.path.length > 0) {
+        // Get robust platform detection for both bot and target
+        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+        const targetPlatIdx = findTargetPlatform(target.x, target.y, platforms);
+
+        // Clamp chase target so the bot stops at combat distance
+        target = this.getCombatTarget(botPlayer, target);
+
+        // SMART PATHFINDING: Try multiple strategies in order of intelligence
+        let pathFound = false;
+
+        // Strategy 1: Direct pathfinding if both on valid platforms
+        if (botPlatIdx >= 0 && targetPlatIdx >= 0) {
+            this.pathfindToTarget(botPlayer, target.x, target.y, platforms);
+            if (this.path.length > 1) {
+                pathFound = true;
+                this.debugInfo += 'DIRECT_PATH ';
+            }
+        }
+
+        // Strategy 2: Multi-hop climbing for elevated targets
+        if (!pathFound && botPlatIdx >= 0 && targetPlatIdx >= 0) {
+            const botPlatY = platforms[botPlatIdx].y;
+            const targetPlatY = platforms[targetPlatIdx].y;
+
+            if (targetPlatY < botPlatY - 50) { // Target is significantly above
+                const climbPath = this.findVerticalClimbPath(botPlayer, platforms, botPlatIdx, targetPlatIdx, target.x, target.y);
+                if (climbPath && climbPath.length > 1) {
+                    this.path = climbPath;
+                    this.pathIndex = 0;
+                    pathFound = true;
+                    this.debugInfo += 'CLIMB_PATH ';
+                }
+            }
+        }
+
+        // Strategy 3: Smart intermediate platform routing
+        if (!pathFound && botPlatIdx >= 0) {
+            const intermediatePath = this.findSmartRoute(botPlayer, target, platforms);
+            if (intermediatePath && intermediatePath.length > 0) {
+                this.path = intermediatePath;
+                this.pathIndex = 0;
+                pathFound = true;
+                this.debugInfo += 'SMART_ROUTE ';
+            }
+        }
+
+        // Execute movement
+        if (pathFound && this.path.length > 0) {
             this.followPath(botPlayer, platforms, currentTick);
         } else {
-            // Fallback: direct move but with improved elevation logic
-            this.directMove(botPlayer, target.x, target.y, platforms, currentTick);
+            // Fallback: intelligent direct movement
+            this.smartDirectMove(botPlayer, target.x, target.y, platforms, currentTick);
         }
 
         this.debugInfo += `CHASE->(${Math.round(target.x)},${Math.round(target.y)})`;
     }
 
     // ================================================================
-    // NEW: Find a multi-hop climbing route from current platform to target platform
-    // Uses intermediate platforms to ascend gradually, like stairs
+    // NEW: Predict where an airborne player will land
     // ================================================================
+    predictPlayerLanding(player, platforms) {
+        if (player.onGround) return { x: player.x, y: player.y };
+
+        // Simple physics prediction - assume they'll fall straight down
+        let predictX = player.x + (player.vx || 0) * 10; // Rough prediction
+        let predictY = player.y;
+
+        // Find the platform they'll likely land on
+        for (const p of platforms) {
+            if (predictX + 20 > p.x && predictX + 20 < p.x + p.w && p.y > predictY) {
+                return { x: predictX, y: p.y };
+            }
+        }
+
+        // Fallback to current position
+        return { x: player.x, y: player.y };
+    }
+
+    // ================================================================
+    // NEW: Find a smart route using intermediate platforms and strategic positioning
+    // ================================================================
+    findSmartRoute(botPlayer, target, platforms) {
+        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+        if (botPlatIdx < 0) return null;
+
+        const targetPlatIdx = findTargetPlatform(target.x, target.y, platforms);
+        if (targetPlatIdx < 0) return null;
+
+        const botPlat = platforms[botPlatIdx];
+        const targetPlat = platforms[targetPlatIdx];
+
+        // If target is much higher, find stepping stone platforms
+        if (targetPlat.y < botPlat.y - 100) {
+            return this.findSteppingStones(botPlayer, botPlat, targetPlat, target, platforms);
+        }
+
+        // If target is on same level but across a gap, find bridge platforms
+        if (Math.abs(targetPlat.y - botPlat.y) < 50) {
+            return this.findBridgePlatforms(botPlayer, botPlat, targetPlat, target, platforms);
+        }
+
+        return null;
+    }
+
+    // ================================================================
+    // NEW: Find stepping stone platforms to reach higher targets
+    // ================================================================
+    findSteppingStones(botPlayer, botPlat, targetPlat, target, platforms) {
+        const waypoints = [];
+        let currentHeight = botPlat.y;
+        const targetHeight = targetPlat.y;
+        const targetX = target.x;
+
+        // Find platforms that create a staircase upward
+        const candidates = platforms.filter(p => 
+            p.y < currentHeight && 
+            p.y > targetHeight - 50 &&
+            Math.abs((p.x + p.w/2) - targetX) < 600
+        ).sort((a, b) => b.y - a.y); // Sort by height, highest first
+
+        let currentX = botPlayer.x;
+        for (const step of candidates) {
+            const heightGain = currentHeight - step.y;
+            const horizontalDist = Math.abs((step.x + step.w/2) - currentX);
+
+            // Check if this step is reachable and useful
+            if (heightGain <= MAX_SINGLE_JUMP_HEIGHT && horizontalDist <= MAX_HORIZONTAL_JUMP_DIST) {
+                const landingX = this.calculateLandingPosition(step, targetX);
+                waypoints.push({
+                    x: landingX,
+                    y: step.y,
+                    platformIndex: platforms.indexOf(step)
+                });
+                currentHeight = step.y;
+                currentX = landingX;
+
+                // If we're close enough to the target height, try to reach it
+                if (Math.abs(currentHeight - targetPlat.y) <= MAX_SINGLE_JUMP_HEIGHT) {
+                    break;
+                }
+            }
+        }
+
+        // Add final target
+        if (waypoints.length > 0) {
+            waypoints.push({
+                x: target.x,
+                y: target.y,
+                platformIndex: platforms.indexOf(targetPlat)
+            });
+        }
+
+        return waypoints.length > 1 ? waypoints : null;
+    }
+
+    // ================================================================
+    // NEW: Find bridge platforms to cross gaps at same level
+    // ================================================================
+    findBridgePlatforms(botPlayer, botPlat, targetPlat, target, platforms) {
+        const waypoints = [];
+        const botCenterX = botPlat.x + botPlat.w / 2;
+        const targetCenterX = targetPlat.x + targetPlat.w / 2;
+        const avgY = (botPlat.y + targetPlat.y) / 2;
+
+        // Find platforms that can serve as bridges
+        const bridges = platforms.filter(p => 
+            Math.abs(p.y - avgY) < 100 &&
+            ((p.x + p.w/2) > Math.min(botCenterX, targetCenterX)) &&
+            ((p.x + p.w/2) < Math.max(botCenterX, targetCenterX))
+        ).sort((a, b) => {
+            const aDist = Math.abs((a.x + a.w/2) - botCenterX);
+            const bDist = Math.abs((b.x + b.w/2) - botCenterX);
+            return aDist - bDist;
+        });
+
+        for (const bridge of bridges) {
+            const landingX = this.calculateLandingPosition(bridge, target.x);
+            waypoints.push({
+                x: landingX,
+                y: bridge.y,
+                platformIndex: platforms.indexOf(bridge)
+            });
+        }
+
+        // Add final target
+        if (waypoints.length > 0) {
+            waypoints.push({
+                x: target.x,
+                y: target.y,
+                platformIndex: platforms.indexOf(targetPlat)
+            });
+        }
+
+        return waypoints.length > 1 ? waypoints : null;
+    }
+
+    // ================================================================
+    // NEW: Intelligent direct movement that doesn't just run into walls
+    // ================================================================
+    smartDirectMove(botPlayer, targetX, targetY, platforms, currentTick) {
+        const dx = targetX - botPlayer.x;
+        const dy = targetY - botPlayer.y;
+        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+
+        // If we're not on a platform, just move toward target
+        if (botPlatIdx < 0) {
+            this.moveToward(botPlayer, targetX, platforms);
+            return;
+        }
+
+        const botPlat = platforms[botPlatIdx];
+        const moveDir = dx > 0 ? 1 : -1;
+        const atEdge = this.isAtPlatformEdge(botPlayer, platforms, moveDir);
+
+        // Target is significantly above us
+        if (dy < -100) {
+            if (atEdge) {
+                // At edge - look for platforms we can reach with a jump
+                const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, moveDir);
+                if (reachablePlatforms.length > 0) {
+                    // Choose the platform that gets us closest to the target
+                    const bestPlatform = reachablePlatforms.reduce((best, p) => {
+                        const pDist = Math.abs(p.y - targetY) + Math.abs((p.x + p.w/2) - targetX) * 0.5;
+                        const bestDist = Math.abs(best.y - targetY) + Math.abs((best.x + best.w/2) - targetX) * 0.5;
+                        return pDist < bestDist ? p : best;
+                    });
+
+                    // Build momentum and jump toward the best platform
+                    const targetLandingX = this.calculateLandingPosition(bestPlatform, targetX);
+                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
+                    this.debugInfo += `SMART_JUMP->${Math.round(targetLandingX)} `;
+                    return;
+                } else {
+                    // No reachable platforms - don't jump off into void
+                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
+                    this.debugInfo += 'NO_JUMP_TARGET ';
+                    return;
+                }
+            } else {
+                // Move toward edge to prepare for jump
+                this.moveToward(botPlayer, targetX, platforms);
+            }
+        }
+        // Target is below us
+        else if (dy > 100) {
+            if (atEdge) {
+                // Check if we can drop down safely
+                const landingPlatform = this.findLandingPlatform(botPlayer, platforms, moveDir);
+                if (landingPlatform) {
+                    botPlayer.inputs.down = true; // Drop through platform
+                    this.moveToward(botPlayer, targetX, platforms);
+                    this.debugInfo += 'SMART_DROP ';
+                } else {
+                    // Don't drop into void
+                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
+                    this.debugInfo += 'NO_DROP_TARGET ';
+                }
+            } else {
+                this.moveToward(botPlayer, targetX, platforms);
+            }
+        }
+        // Target is roughly same level
+        else {
+            if (atEdge && Math.abs(dx) > 50) {
+                // Check if we can jump across a gap
+                const landingPlatform = this.findLandingPlatform(botPlayer, platforms, moveDir);
+                if (landingPlatform && Math.abs(landingPlatform.y - botPlat.y) < 100) {
+                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
+                    this.debugInfo += 'GAP_JUMP ';
+                } else {
+                    // Can't cross gap safely
+                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
+                    this.debugInfo += 'CANT_CROSS ';
+                }
+            } else {
+                this.moveToward(botPlayer, targetX, platforms);
+            }
+        }
+    }
+
+    // ================================================================
+    // NEW: Find platforms reachable with a jump from current position
+    // ================================================================
+    findReachablePlatforms(botPlayer, platforms, direction) {
+        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+        if (botPlatIdx < 0) return [];
+
+        const botPlat = platforms[botPlatIdx];
+        const jumpStartX = direction > 0 ? botPlat.x + botPlat.w : botPlat.x;
+        const reachable = [];
+
+        for (const p of platforms) {
+            if (p === botPlat) continue;
+
+            const heightDiff = botPlat.y - p.y;
+            const horizontalDist = direction > 0 
+                ? Math.max(0, p.x - jumpStartX)
+                : Math.max(0, jumpStartX - (p.x + p.w));
+
+            // Check if reachable with jump
+            const canReachHeight = heightDiff <= MAX_SINGLE_JUMP_HEIGHT && heightDiff >= -MAX_DROP_DIST;
+            const canReachDistance = horizontalDist <= MAX_HORIZONTAL_JUMP_DIST;
+
+            if (canReachHeight && canReachDistance) {
+                reachable.push(p);
+            }
+        }
+
+        return reachable;
+    }
+
+    // ================================================================
+    // NEW: Find where we would land if we drop/jump in a direction
+    // ================================================================
+    findLandingPlatform(botPlayer, platforms, direction) {
+        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+        if (botPlatIdx < 0) return null;
+
+        const botPlat = platforms[botPlatIdx];
+        const searchX = direction > 0 ? botPlat.x + botPlat.w + 50 : botPlat.x - 50;
+
+        // Find the highest platform below our current position in the search direction
+        let bestPlatform = null;
+        let bestY = Infinity;
+
+        for (const p of platforms) {
+            if (p === botPlat) continue;
+            if (p.y <= botPlat.y) continue; // Must be below us
+
+            // Check if the platform is in our landing zone
+            if (searchX >= p.x - 50 && searchX <= p.x + p.w + 50) {
+                if (p.y < bestY) {
+                    bestY = p.y;
+                    bestPlatform = p;
+                }
+            }
+        }
+
+        return bestPlatform;
+    }
     findVerticalClimbPath(botPlayer, platforms, botPlatIdx, targetPlatIdx, targetX, targetY) {
         // Build graph if needed
         if (!platformGraph || graphBuildVersion !== platforms.length) {
@@ -1201,15 +1519,11 @@ class BotAI {
     // ============================================================
 
     pathfindToTarget(botPlayer, targetX, targetY, platforms) {
-        // ================================================================
-        // FIX: Use robust target platform detection (findTargetPlatform)
-        // instead of the original findPlatformAt which fails for airborne
-        // or edge-standing players
-        // ================================================================
         const botPlatform = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
         const targetPlatform = findTargetPlatform(targetX, targetY, platforms);
 
         if (botPlatform < 0 || targetPlatform < 0) {
+            // One or both not on platforms - create simple direct path
             this.path = [{
                 x: targetX,
                 y: targetY,
@@ -1219,10 +1533,10 @@ class BotAI {
             return;
         }
 
-        // If both on the full-width ground platform, skip graph pathfinding
+        // If both on the same large platform, just walk directly
         if (botPlatform === targetPlatform) {
             const p = platforms[botPlatform];
-            if (p.w > 4500) {
+            if (p.w > 400) { // Large platform - can walk directly
                 this.path = [{
                     x: targetX,
                     y: targetY,
@@ -1242,43 +1556,150 @@ class BotAI {
         // Find path in graph
         let nodePath = findPathInGraph(platformGraph, botPlatform, targetPlatform);
 
-        // If no path found, try alternative platform
-        if (nodePath.length <= 1 || (nodePath.length === 1 && nodePath[0] === botPlatform)) {
-            const alternativePlatform = this.findAlternativePlatform(botPlatform, targetPlatform, targetX, platforms);
-            if (alternativePlatform !== null && alternativePlatform !== targetPlatform) {
-                nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform);
+        // If no direct path found, try alternative strategies
+        if (nodePath.length <= 1) {
+            // Strategy 1: Find intermediate platforms that can bridge the gap
+            const bridgePlatform = this.findBestBridgePlatform(botPlatform, targetPlatform, platforms);
+            if (bridgePlatform !== null) {
+                const pathToBridge = findPathInGraph(platformGraph, botPlatform, bridgePlatform);
+                const pathFromBridge = findPathInGraph(platformGraph, bridgePlatform, targetPlatform);
+                
+                if (pathToBridge.length > 1 && pathFromBridge.length > 1) {
+                    // Combine paths, removing duplicate bridge platform
+                    nodePath = pathToBridge.concat(pathFromBridge.slice(1));
+                }
             }
         }
 
-        // Convert node path to waypoints
+        // Convert node path to waypoints with intelligent positioning
         this.path = [];
-
-        // ================================================================
-        // FIX: Improved waypoint generation that considers vertical traversal
-        // and alternative approaches when the direct route fails
-        // ================================================================
+        
         if (nodePath.length > 1) {
-            for (const nodeIdx of nodePath) {
+            for (let i = 0; i < nodePath.length; i++) {
+                const nodeIdx = nodePath[i];
                 const p = platforms[nodeIdx];
-                // Choose the landing position that creates a natural path
-                // toward the target rather than a binary left/right edge choice
-                const wayX = this.calculateLandingPosition(p, targetX);
+                
+                // Calculate smart landing position based on path direction
+                let wayX;
+                if (i === nodePath.length - 1) {
+                    // Final platform - go to target position
+                    wayX = targetX;
+                } else {
+                    // Intermediate platform - position for next jump
+                    const nextNodeIdx = nodePath[i + 1];
+                    const nextP = platforms[nextNodeIdx];
+                    wayX = this.calculateOptimalWaypointPosition(p, nextP, targetX);
+                }
+                
                 this.path.push({
                     x: wayX,
                     y: p.y,
                     platformIndex: nodeIdx
                 });
             }
+        } else {
+            // Fallback: direct path to target
+            this.path.push({
+                x: targetX,
+                y: targetY,
+                platformIndex: targetPlatform
+            });
         }
 
-        // Add final target waypoint
-        this.path.push({
-            x: targetX,
-            y: targetY,
-            platformIndex: targetPlatform
-        });
-
         this.pathIndex = 0;
+    }
+
+    // ================================================================
+    // NEW: Find the best intermediate platform to bridge two disconnected platforms
+    // ================================================================
+    findBestBridgePlatform(fromIdx, toIdx, platforms) {
+        if (fromIdx < 0 || toIdx < 0) return null;
+
+        const fromPlat = platforms[fromIdx];
+        const toPlat = platforms[toIdx];
+        
+        let bestBridge = null;
+        let bestScore = Infinity;
+
+        for (let i = 0; i < platforms.length; i++) {
+            if (i === fromIdx || i === toIdx) continue;
+            
+            const bridge = platforms[i];
+            
+            // Calculate if this platform can serve as a bridge
+            const fromToBridge = this.canReachPlatform(fromPlat, bridge);
+            const bridgeToTarget = this.canReachPlatform(bridge, toPlat);
+            
+            if (fromToBridge && bridgeToTarget) {
+                // Score based on total distance and height efficiency
+                const totalDist = this.platformDistance(fromPlat, bridge) + this.platformDistance(bridge, toPlat);
+                const heightPenalty = Math.abs(bridge.y - (fromPlat.y + toPlat.y) / 2);
+                const score = totalDist + heightPenalty * 2;
+                
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestBridge = i;
+                }
+            }
+        }
+
+        return bestBridge;
+    }
+
+    // ================================================================
+    // NEW: Check if one platform can reach another with a jump
+    // ================================================================
+    canReachPlatform(fromPlat, toPlat) {
+        const heightDiff = fromPlat.y - toPlat.y;
+        const horizontalGap = Math.max(0, 
+            Math.min(Math.abs(toPlat.x - (fromPlat.x + fromPlat.w)), 
+                     Math.abs(fromPlat.x - (toPlat.x + toPlat.w))));
+        
+        // Check jump constraints
+        const canReachHeight = heightDiff <= MAX_SINGLE_JUMP_HEIGHT && heightDiff >= -MAX_DROP_DIST;
+        const canReachDistance = horizontalGap <= MAX_HORIZONTAL_JUMP_DIST;
+        
+        return canReachHeight && canReachDistance;
+    }
+
+    // ================================================================
+    // NEW: Calculate distance between two platforms
+    // ================================================================
+    platformDistance(platA, platB) {
+        const dx = (platA.x + platA.w/2) - (platB.x + platB.w/2);
+        const dy = platA.y - platB.y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // ================================================================
+    // NEW: Calculate optimal waypoint position for path traversal
+    // ================================================================
+    calculateOptimalWaypointPosition(currentPlat, nextPlat, finalTargetX) {
+        const margin = 30;
+        const minX = currentPlat.x + margin;
+        const maxX = currentPlat.x + currentPlat.w - margin;
+
+        // If there's a next platform, position ourselves for the best jump to it
+        if (nextPlat) {
+            const nextCenterX = nextPlat.x + nextPlat.w / 2;
+            
+            // If next platform is higher, position for upward jump
+            if (nextPlat.y < currentPlat.y - 20) {
+                // Position closer to the edge we'll jump from
+                const jumpFromRight = nextCenterX > currentPlat.x + currentPlat.w / 2;
+                const optimalX = jumpFromRight ? maxX - 20 : minX + 20;
+                return Math.max(minX, Math.min(maxX, optimalX));
+            }
+            // If next platform is at same level, position toward it
+            else {
+                const optimalX = nextCenterX;
+                return Math.max(minX, Math.min(maxX, optimalX));
+            }
+        }
+
+        // No next platform or fallback - use target position
+        const targetX = finalTargetX;
+        return Math.max(minX, Math.min(maxX, targetX));
     }
 
     // ================================================================
@@ -1286,6 +1707,11 @@ class BotAI {
     // for waypoint generation, preferring natural traversal paths
     // ================================================================
     calculateLandingPosition(platform, targetX) {
+        // Validate platform exists
+        if (!platform || typeof platform.x !== 'number' || typeof platform.w !== 'number') {
+            return targetX;
+        }
+        
         const margin = 30;
         const minX = platform.x + margin;
         const maxX = platform.x + platform.w - margin;
@@ -1501,14 +1927,24 @@ class BotAI {
     }
 
     directMove(botPlayer, targetX, targetY, platforms, currentTick) {
-        const dx = targetX - botPlayer.x;
-        const dy = targetY - botPlayer.y;
-        const isGround = this.isGroundPlatform(botPlayer, platforms);
+        // Redirect to the new smart direct move function
+        this.smartDirectMove(botPlayer, targetX, targetY, platforms, currentTick);
+    }
 
-        // When on any ground platform with a target above, sprint toward
-        // the player and perform a edge jump — also works for hotel floor bases.
-        if (isGround && dy < -30) {
-            if (dx > 0) {
+    moveToward(botPlayer, targetX, platforms) {
+        const dx = targetX - botPlayer.x;
+        if (Math.abs(dx) < 10) {
+            botPlayer.inputs.left = false;
+            botPlayer.inputs.right = false;
+            return;
+        }
+
+        // NEW: Check for bot collision avoidance
+        const avoidanceDirection = this.checkBotCollisionAvoidance(botPlayer, dx > 0 ? 1 : -1);
+        
+        if (avoidanceDirection !== 0) {
+            // Move in avoidance direction instead of toward target
+            if (avoidanceDirection > 0) {
                 botPlayer.inputs.right = true;
                 botPlayer.inputs.left = false;
                 botPlayer.facingRight = true;
@@ -1517,70 +1953,7 @@ class BotAI {
                 botPlayer.inputs.left = true;
                 botPlayer.facingRight = false;
             }
-            // Only jump when we have built up some speed (not random spam)
-            // Use momentum-based jumping when near a platform edge
-            const atRightEdge = this.isAtPlatformEdge(botPlayer, platforms, 1);
-            const atLeftEdge = this.isAtPlatformEdge(botPlayer, platforms, -1);
-            
-            if (atRightEdge && dx > 0) {
-                this.buildMomentumAndJump(botPlayer, platforms, currentTick, 1, true);
-            } else if (atLeftEdge && dx < 0) {
-                this.buildMomentumAndJump(botPlayer, platforms, currentTick, -1, true);
-            } else if (Math.random() < 0.08 && botPlayer.onGround) {
-                botPlayer.inputs.jump = true;
-                this.lastJumpTick = currentTick;
-                this.jumpAttempts++;
-            }
-            return;
-        }
-
-        // Standard case
-        const moveDir = dx > 0 ? 1 : -1;
-        const atEdge = this.isAtPlatformEdge(botPlayer, platforms, moveDir);
-
-        if (dy < -30) {
-            // Target is above us
-            if (!botPlayer.onGround) {
-                this.moveToward(botPlayer, targetX, platforms);
-                return;
-            }
-
-            if (atEdge) {
-                // At platform edge - use momentum jump instead of raw jump
-                this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
-            } else {
-                // Run toward edge with direction
-                if (dx > 0) {
-                    botPlayer.inputs.right = true;
-                    botPlayer.inputs.left = false;
-                    botPlayer.facingRight = true;
-                } else {
-                    botPlayer.inputs.right = false;
-                    botPlayer.inputs.left = true;
-                    botPlayer.facingRight = false;
-                }
-            }
-        } else if (dy > 60 && botPlayer.onGround) {
-            // Target below
-            if (atEdge) {
-                botPlayer.inputs.down = true;
-            }
-            this.moveToward(botPlayer, targetX, platforms);
-        } else {
-            // Same level
-            this.moveToward(botPlayer, targetX, platforms);
-            if (atEdge && botPlayer.onGround) {
-                // Use momentum jump
-                this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
-            }
-        }
-    }
-
-    moveToward(botPlayer, targetX, platforms) {
-        const dx = targetX - botPlayer.x;
-        if (Math.abs(dx) < 10) {
-            botPlayer.inputs.left = false;
-            botPlayer.inputs.right = false;
+            this.debugInfo += 'AVOID ';
             return;
         }
 
@@ -1595,47 +1968,91 @@ class BotAI {
         }
     }
 
-    // === MOMENTUM-BASED JUMPING SYSTEM ===
-    // The bot intelligently backs up to build run-up space, then sprints toward
-    // the edge and jumps at the last moment for maximum horizontal distance.
+    // NEW: Check for bot collision avoidance
+    checkBotCollisionAvoidance(botPlayer, intendedDirection) {
+        // Get reference to global playerMap from the update context
+        const playerMap = global.currentPlayerMap;
+        if (!playerMap) return 0;
 
-    // Calculate jump distance info for the current target
-    calculateJumpDistance(botPlayer, targetX, targetY, platforms) {
-        const currentPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
-        if (currentPlatIdx < 0) return null;
-        const currentPlat = platforms[currentPlatIdx];
+        const COLLISION_CHECK_DISTANCE = 80; // pixels ahead to check
+        const COLLISION_WIDTH = 60; // width of collision zone
+        const AVOIDANCE_DISTANCE = 120; // how far to look for alternate paths
+
+        // Check for bots directly in our path
+        const checkX = botPlayer.x + (intendedDirection * COLLISION_CHECK_DISTANCE);
+        const botsInPath = [];
         
-        const targetPlatIdx = findTargetPlatform(targetX, targetY, platforms);
-        if (targetPlatIdx < 0) return null;
-        const targetPlat = platforms[targetPlatIdx];
-        
-        const aRight = currentPlat.x + currentPlat.w;
-        const bLeft = targetPlat.x;
-        const bRight = targetPlat.x + targetPlat.w;
-        const aLeft = currentPlat.x;
-        
-        let hGap;
-        let needDirection;
-        
-        if (targetX > botPlayer.x) {
-            hGap = bLeft - aRight;
-            needDirection = 1;
-        } else {
-            hGap = aLeft - bRight;
-            needDirection = -1;
+        for (const [id, { player }] of playerMap) {
+            if (id === this.playerId || !player.isBot || player.isDead) continue;
+            
+            // Check if bot is in our intended path
+            const dx = Math.abs(player.x - checkX);
+            const dy = Math.abs(player.y - botPlayer.y);
+            
+            if (dx < COLLISION_WIDTH && dy < 40) {
+                botsInPath.push({ id, player, distance: dx });
+            }
         }
+
+        if (botsInPath.length === 0) {
+            this.botCollisionTimer = 0;
+            this.collidingBotIds = [];
+            return 0; // No collision, move normally
+        }
+
+        // Track collision duration
+        this.botCollisionTimer++;
         
-        const vDist = currentPlat.y - targetPlat.y;
-        
-        return {
-            hGap: Math.max(0, hGap),
-            vDist: vDist,
-            needDirection: needDirection,
-            currentPlat: currentPlat,
-            targetPlat: targetPlat,
-            runUpSpace: needDirection > 0 ? (botPlayer.x - currentPlat.x) : (currentPlat.x + currentPlat.w - botPlayer.x)
-        };
+        // Update colliding bot IDs
+        const currentCollidingIds = botsInPath.map(b => b.id);
+        this.collidingBotIds = currentCollidingIds;
+
+        // If we've been colliding for too long, make bots attack each other
+        if (this.botCollisionTimer > 60) { // 2 seconds at 30 TPS
+            const closestBot = botsInPath.reduce((closest, bot) => 
+                bot.distance < closest.distance ? bot : closest
+            );
+            
+            // Register the blocking bot as a target for revenge
+            this.registerHitBy(closestBot.id);
+            this.debugInfo += 'BOT_RAGE ';
+            this.botCollisionTimer = 0; // Reset timer after triggering rage
+            return 0; // Let normal movement continue so we can attack
+        }
+
+        // Try to find an alternate path around the collision
+        // Check if we can go around (up/down on platform or slight detour)
+        const currentPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, global.currentPlatforms || []);
+        if (currentPlatIdx >= 0) {
+            const platform = global.currentPlatforms[currentPlatIdx];
+            
+            // Try to move to edge of platform to go around
+            if (intendedDirection > 0) {
+                // Going right, try to go to right edge first
+                const rightEdge = platform.x + platform.w - 30;
+                if (botPlayer.x < rightEdge - 20) {
+                    return 1; // Move right to edge
+                }
+            } else {
+                // Going left, try to go to left edge first  
+                const leftEdge = platform.x + 30;
+                if (botPlayer.x > leftEdge + 20) {
+                    return -1; // Move left to edge
+                }
+            }
+        }
+
+        // If we can't find a good avoidance path, try opposite direction briefly
+        if (this.botCollisionTimer > 30) { // After 1 second, try backing up
+            return -intendedDirection;
+        }
+
+        return 0; // Default: no avoidance
     }
+
+    // === IMPROVED MOMENTUM-BASED JUMPING SYSTEM ===
+    // The bot intelligently backs up to build run-up space, then sprints toward
+    // the edge and jumps at the optimal moment for maximum horizontal distance.
 
     // Core momentum management: back up, sprint, jump at the right moment
     buildMomentumAndJump(botPlayer, platforms, currentTick, jumpDirection, shouldJump) {
@@ -1644,6 +2061,7 @@ class BotAI {
             // Fallback: just face direction and jump
             botPlayer.inputs.right = jumpDirection > 0;
             botPlayer.inputs.left = jumpDirection < 0;
+            botPlayer.facingRight = jumpDirection > 0;
             if (shouldJump) botPlayer.inputs.jump = true;
             return;
         }
@@ -1652,30 +2070,28 @@ class BotAI {
         const edgeX = jumpDirection > 0 ? currentPlat.x + currentPlat.w : currentPlat.x;
         const distToEdge = Math.abs(edgeX - botPlayer.x);
         
-        // DYNAMIC run-up calculation based on platform width available
+        // SMART run-up calculation based on what we're trying to reach
         const availableRunUp = jumpDirection > 0 
             ? (botPlayer.x - currentPlat.x) 
             : (currentPlat.x + currentPlat.w - botPlayer.x);
         
-        // Bigger gaps need more run-up (capped by platform width)
-        const MAX_PLATFORM_RUNUP = Math.min(300, currentPlat.w * 0.4);
-        const targetRunUp = Math.min(MAX_PLATFORM_RUNUP, Math.max(80, currentPlat.w * 0.25));
+        // Calculate optimal run-up based on the jump we need to make
+        const targetRunUp = this.calculateOptimalRunUp(botPlayer, platforms, jumpDirection);
         
-        // Phase 1: BACK UP - we're too close to the edge, move away to build run-up
-        if (distToEdge < 80 && shouldJump && availableRunUp < targetRunUp) {
-            // Move AWAY from the edge to create run-up space
+        // Phase 1: BACK UP - we need more run-up space
+        if (availableRunUp < targetRunUp && distToEdge < targetRunUp) {
             const backDir = -jumpDirection;
             botPlayer.inputs.right = backDir > 0;
             botPlayer.inputs.left = backDir < 0;
             botPlayer.facingRight = backDir > 0;
             botPlayer.inputs.jump = false;
             this.momentumState = 'BACKING_UP';
-            this.debugInfo += `BACKUP(${Math.round(distToEdge)}px)`;
+            this.debugInfo += `BACKUP(need:${Math.round(targetRunUp)},have:${Math.round(availableRunUp)})`;
             return;
         }
         
         // Phase 2: SPRINT - run toward the edge at full speed
-        if (distToEdge > 15 && shouldJump) {
+        if (distToEdge > 20 && shouldJump) {
             botPlayer.inputs.right = jumpDirection > 0;
             botPlayer.inputs.left = jumpDirection < 0;
             botPlayer.facingRight = jumpDirection > 0;
@@ -1685,8 +2101,8 @@ class BotAI {
             return;
         }
         
-        // Phase 3: JUMP - at the very edge, jump with full momentum!
-        if (distToEdge <= 15 && shouldJump) {
+        // Phase 3: JUMP - at the optimal distance from edge, jump with full momentum!
+        if (distToEdge <= 20 && shouldJump) {
             botPlayer.inputs.right = jumpDirection > 0;
             botPlayer.inputs.left = jumpDirection < 0;
             botPlayer.facingRight = jumpDirection > 0;
@@ -1696,6 +2112,46 @@ class BotAI {
             this.momentumState = 'JUMPING';
             this.debugInfo += `MOMENTUM_JUMP!`;
         }
+    }
+
+    // ================================================================
+    // NEW: Calculate optimal run-up distance based on what we're trying to reach
+    // ================================================================
+    calculateOptimalRunUp(botPlayer, platforms, jumpDirection) {
+        const currentPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
+        if (currentPlatIdx < 0) return 100; // Default run-up
+
+        const currentPlat = platforms[currentPlatIdx];
+        const maxPlatformRunUp = Math.min(250, currentPlat.w * 0.4);
+
+        // Look for what we're trying to jump to
+        const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, jumpDirection);
+        
+        if (reachablePlatforms.length === 0) {
+            return Math.min(100, maxPlatformRunUp); // Conservative jump
+        }
+
+        // Find the furthest/highest platform we might want to reach
+        let maxDistance = 0;
+        let maxHeight = 0;
+
+        for (const p of reachablePlatforms) {
+            const jumpStartX = jumpDirection > 0 ? currentPlat.x + currentPlat.w : currentPlat.x;
+            const horizontalDist = jumpDirection > 0 
+                ? Math.max(0, p.x - jumpStartX)
+                : Math.max(0, jumpStartX - (p.x + p.w));
+            const heightDiff = Math.max(0, currentPlat.y - p.y);
+
+            maxDistance = Math.max(maxDistance, horizontalDist);
+            maxHeight = Math.max(maxHeight, heightDiff);
+        }
+
+        // Calculate run-up needed: more distance/height = more run-up
+        const distanceRunUp = maxDistance * 0.4;
+        const heightRunUp = maxHeight * 0.3;
+        const totalRunUp = Math.max(80, distanceRunUp + heightRunUp);
+
+        return Math.min(totalRunUp, maxPlatformRunUp);
     }
 
     moveTowardWithJump(botPlayer, targetX, targetY, platforms, currentTick, shouldJump) {
@@ -1751,6 +2207,24 @@ class BotAI {
         }
 
         if (this.stuckTimer > BOT_STUCK_TIMEOUT) {
+            // NEW: Check if we're stuck because of other bots
+            if (this.collidingBotIds.length > 0) {
+                // We're stuck because of bot collision - try to fight our way out
+                const playerMap = global.currentPlayerMap;
+                if (playerMap && this.collidingBotIds.length > 0) {
+                    const blockingBotId = this.collidingBotIds[0];
+                    const blockingBot = playerMap.get(blockingBotId);
+                    if (blockingBot && !blockingBot.player.isDead) {
+                        this.targetPlayerId = blockingBotId;
+                        this.targetLockTimer = 120;
+                        this.state = 'ATTACK';
+                        this.debugInfo += 'FIGHT_STUCK ';
+                        this.stuckTimer = 0;
+                        return;
+                    }
+                }
+            }
+
             this.path = [];
             this.pathIndex = 0;
             this.stuckTimer = 0;
@@ -1787,7 +2261,10 @@ class BotAI {
                     const nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform);
                     this.path = [];
                     for (const nodeIdx of nodePath) {
+                        // Validate platform exists before using it
+                        if (nodeIdx < 0 || nodeIdx >= platforms.length) continue;
                         const p = platforms[nodeIdx];
+                        if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') continue;
                         const prevRef = this.path.length > 0 ? this.path[this.path.length - 1].x : botPlayer.x;
                         const wayX = this.calculateLandingPosition(p, prevRef);
                         this.path.push({

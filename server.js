@@ -220,12 +220,26 @@ function initPlatforms() {
     platforms.push({ x: 3000, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
     
     // =========================================================
+    // VERTICAL LADDERS - Left and right sides for easy vertical movement
+    // =========================================================
+    // Left side ladder (from ground to top)
+    for (let y = WORLD_HEIGHT - 300; y > 300; y -= 250) {
+        platforms.push({ x: 300, y, w: 150, h: 16 });
+    }
+    
+    // Right side ladder (from ground to top)
+    for (let y = WORLD_HEIGHT - 300; y > 300; y -= 250) {
+        platforms.push({ x: 4550, y, w: 150, h: 16 });
+    }
+    
+    // =========================================================
     // SURROUNDING PLATFORMS - around the hotel
     // Provides access routes to different hotel floors
     // =========================================================
     
     // Connection bridges to hotel left side (from edges of map)
-    for (let y = 3600; y > 200; y -= 300) {
+    // Increased spacing to 400px for better jumpability
+    for (let y = 3600; y > 200; y -= 400) {
         const bridgeX = 2200;
         const bridgeW = 200;
         // Check if overlaps with hotel
@@ -243,7 +257,8 @@ function initPlatforms() {
     }
     
     // Connection bridges to hotel right side
-    for (let y = 3600; y > 200; y -= 300) {
+    // Increased spacing to 400px for better jumpability
+    for (let y = 3600; y > 200; y -= 400) {
         const bridgeX = 2600;
         const bridgeW = 200;
         let overlaps = false;
@@ -264,8 +279,9 @@ function initPlatforms() {
     // =========================================================
     const towerPositions = [600, 4400];
     for (const towerX of towerPositions) {
-        for (let y = WORLD_HEIGHT - 200; y > 500; y -= 260) {
-            const offsetX = Math.floor((WORLD_HEIGHT - 200 - y) / 260) % 2 === 0 ? 0 : 60;
+        // Increased spacing to 350px for better jumpability
+        for (let y = WORLD_HEIGHT - 200; y > 500; y -= 350) {
+            const offsetX = Math.floor((WORLD_HEIGHT - 200 - y) / 350) % 2 === 0 ? 0 : 60;
             let overlaps = false;
             const plat = { x: towerX + offsetX, y, w: 100, h: 16 };
             for (const p of platforms) {
@@ -282,15 +298,17 @@ function initPlatforms() {
     // =========================================================
     // RANDOM FILLER PLATFORMS - ensures map is not too sparse
     // =========================================================
-    for (let i = 0; i < 150; i++) {
+    // Increased spacing and reduced density for better jumpability
+    for (let i = 0; i < 100; i++) {
         const x = 50 + Math.random() * (WORLD_WIDTH - 400);
         const y = 200 + Math.random() * (WORLD_HEIGHT - 500);
-        const w = 60 + Math.random() * 100;
+        const w = 80 + Math.random() * 120;  // Slightly wider platforms
         const h = 16;
         
         let overlaps = false;
         for (const plat of platforms) {
-            const buffer = 50;
+            // Increased buffer to 80px for better jump spacing
+            const buffer = 80;
             if (x < plat.x + plat.w + buffer &&
                 x + w > plat.x - buffer &&
                 y < plat.y + plat.h + buffer &&
