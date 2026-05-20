@@ -348,6 +348,9 @@ class Player {
         this.fadeTimer = 0; // ticks until fade complete (30 ticks = ~1 second)
         this.opacity = 1.0; // 1.0 = fully visible, 0.0 = invisible
         this.isFadingIn = false; // true when fading in after respawn
+        
+        // Spectator state
+        this.isSpectator = false; // true when player is in spectator mode (camera only)
     }
 
     // Generate dark, desaturated colors
@@ -453,6 +456,11 @@ function removePlayer(id) {
 
 // Apply physics to player - SERVER ONLY
 function applyPhysics(player) {
+    // Skip physics for spectators - they are just cameras
+    if (player.isSpectator) {
+        return;
+    }
+    
     // Apply gravity
     player.vy += GRAVITY;
     
@@ -672,6 +680,11 @@ function applyPhysics(player) {
 
 // Check collision - SERVER ONLY
 function checkCollision(player) {
+    // Skip collision for spectators
+    if (player.isSpectator) {
+        return;
+    }
+    
     const wasOnGround = player.onGround;
     player.onGround = false;
     
@@ -745,6 +758,11 @@ function playersAreColliding(a, b) {
 
 // Separate players that are overlapping (push apart)
 function resolvePlayerBodyCollision(a, b) {
+    // Skip collision resolution for spectators
+    if (a.isSpectator || b.isSpectator) {
+        return;
+    }
+    
     const aLeft = a.x + HITBOX_LEFT_INSET;
     const aRight = aLeft + HITBOX_WIDTH;
     const bLeft = b.x + HITBOX_LEFT_INSET;
@@ -959,6 +977,8 @@ function gameLoop() {
     // Gather attack data before any collision processing
     const activeAttacks = [];
     for (const [id, { player }] of players) {
+        // Skip spectators - they don't attack
+        if (player.isSpectator) continue;
         const attackHitbox = getAttackHitbox(player);
         if (attackHitbox) {
             activeAttacks.push({
@@ -1039,6 +1059,8 @@ function gameLoop() {
         const snapshotTime = Date.now();   // single stable call for this tick
         const playerStates = [];
         for (const [id, { player }] of players) {
+            // Skip spectators - they don't appear in the game world
+            if (player.isSpectator) continue;
             playerStates.push({
                 id: id,
                 x: Math.round(player.x * 100) / 100, // Round to reduce precision
@@ -1059,6 +1081,9 @@ function gameLoop() {
                 isFadingIn: player.isFadingIn
             });
         }
+        
+        // Don't send state if there are no actual players (only spectators)
+        if (playerStates.length === 0) return;
         
         const message = JSON.stringify({
             type: 'state',
@@ -1092,20 +1117,24 @@ wss.on('connection', (ws) => {
     
     const playerId = addPlayer(ws);
     
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            
-            if (data.type === 'input') {
-                const playerData = players.get(playerId);
-                if (playerData) {
-                    playerData.player.inputs = data.inputs;
-                }
-            }
-        } catch (e) {
-            console.error('Error parsing message:', e);
-        }
-    });
+     ws.on('message', (message) => {
+         try {
+             const data = JSON.parse(message);
+             
+             if (data.type === 'input') {
+                 const playerData = players.get(playerId);
+                 if (playerData) {
+                     playerData.player.inputs = data.inputs;
+                     // Update spectator state if provided
+                     if (data.inputs.hasOwnProperty('isSpectator')) {
+                         playerData.player.isSpectator = data.inputs.isSpectator;
+                     }
+                 }
+             }
+         } catch (e) {
+             console.error('Error parsing message:', e);
+         }
+     });
     
     ws.on('close', () => {
         console.log('Client disconnected');

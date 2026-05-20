@@ -66,6 +66,107 @@
             z-index: 10;
         }
 
+        /* ── Spectator Panel ──────────────────────────────────── */
+        #spectatorPanel {
+            display: none;
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 260px;
+            max-height: 320px;
+            background-color: rgba(14, 14, 14, 0.93);
+            border: 1px solid #3a3a3a;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #9a9a9a;
+            z-index: 20;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #spectatorHeader {
+            padding: 5px 8px;
+            background-color: #2a2a2a;
+            border-bottom: 1px solid #3a3a3a;
+            color: #b7e057;
+            font-size: 11px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        #spectatorHint {
+            padding: 3px 8px;
+            font-size: 9px;
+            color: #555;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        #spectatorList {
+            overflow-y: auto;
+            max-height: 240px;
+        }
+
+        #spectatorList::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        #spectatorList::-webkit-scrollbar-thumb {
+            background-color: #3a3a3a;
+        }
+
+        .spectatorEntry {
+            padding: 3px 8px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .spectatorEntry:hover,
+        .spectatorEntry.selected {
+            background-color: #2a3a1a;
+            color: #b7e057;
+        }
+
+        .spectatorEntry .colourSwatch {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        #spectatorFreeLabel {
+            padding: 3px 8px;
+            cursor: pointer;
+            color: #555;
+        }
+
+        #spectatorFreeLabel:hover {
+            background-color: #2a2a2a;
+            color: #9a9a9a;
+        }
+
+        #spectatorCloseBtn {
+            display: none;
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: none;
+            border: none;
+            color: #555;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 4px 6px;
+            font-family: 'Courier New', monospace;
+        }
+
+        #spectatorCloseBtn:hover {
+            color: #b7e057;
+        }
     </style>
 </head>
 <body>
@@ -73,6 +174,13 @@
         <canvas id="canvas"></canvas>
         <div id="playerCount">Players: 0</div>
         <div id="fpsCounter">FPS: 0</div>
+        <div id="spectatorPanel">
+            <button id="spectatorCloseBtn">&times;</button>
+            <div id="spectatorHeader">&gt; SPECTATOR</div>
+            <div id="spectatorHint">[WASD] move cam | [QE] zoom | [1-9] attach | [Click] attach | [ESC] exit</div>
+            <div id="spectatorList"></div>
+            <div id="spectatorFreeLabel">&gt; Free Camera</div>
+        </div>
         <canvas id="minimap"></canvas>
     </div>
 
@@ -152,6 +260,18 @@
 
         // Cooldown to prevent attack from re-triggering every tick while held
         let attackInputSent = false;
+
+        // Spectator mode state
+        let spectatorActive = false;
+        let spectatorTargetId = null;  // null = free camera, number = tracking that entity
+        const SPECTATOR_CAMERA_ZOOM = 1.0;
+        let spectatorCamera = { x: 0, y: 0 }; // World-space free-camera position when no target is set
+        let spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM; // Current zoom in spectator
+
+        // Plus-key combo detection
+        let plusPressCount = 0;
+        let plusPressTimer = null;
+        const PLUS_COMBO_WINDOW = 600; // ms — must press + 3 times within this window
 
         // Hitbox visualization (toggled with Shift+H)
         // Set HITBOX_TOGGLE_ENABLED to false to disable the Shift+H hotkey
@@ -780,6 +900,52 @@
 
         // Input handlers
         document.addEventListener('keydown', (e) => {
+
+            // ── Spectator triple-plus combo ─ Ctrl + + + + (key === 'Equal')
+            if (e.code === 'Equal' && e.ctrlKey) {
+                e.preventDefault();
+                const now = Date.now();
+                if (plusPressTimer && now - plusPressTimer < PLUS_COMBO_WINDOW) {
+                    plusPressCount++;
+                } else {
+                    plusPressCount = 1;
+                }
+                plusPressTimer = now;
+                if (plusPressCount >= 3) {
+                    plusPressCount = 0;
+                    plusPressTimer = null;
+                    toggleSpectator();
+                }
+                return;
+            }
+
+            // ── Escape exits spectator ──────────────────────────
+            if (e.code === 'Escape' && spectatorActive) {
+                e.preventDefault();
+                exitSpectator();
+                return;
+            }
+
+            if (spectatorActive) {
+                // ── Spectator free-camera: WASD + QE ─────────────
+                // Letter keys W/A/S/D → WASD
+                if (e.code === 'KeyW' || e.code === 'ArrowUp')    { e.preventDefault(); spectatorCamera.y -= 12; }
+                if (e.code === 'KeyS' || e.code === 'ArrowDown')  { e.preventDefault(); spectatorCamera.y += 12; }
+                if (e.code === 'KeyA' || e.code === 'ArrowLeft')  { e.preventDefault(); spectatorCamera.x -= 12; }
+                if (e.code === 'KeyD' || e.code === 'ArrowRight') { e.preventDefault(); spectatorCamera.x += 12; }
+                if (e.code === 'KeyQ') { e.preventDefault(); spectatorCameraZoom = Math.max(0.25, spectatorCameraZoom - 0.05); }
+                if (e.code === 'KeyE') { e.preventDefault(); spectatorCameraZoom = Math.min(4.0, spectatorCameraZoom + 0.05); }
+
+                // Number keys 1–9: select entity from the panel list
+                const num = parseInt(e.key);
+                if (!isNaN(num) && num >= 1 && num <= 9) {
+                    e.preventDefault();
+                    selectSpectatorTargetByIndex(num - 1);
+                }
+                return;
+            }
+
+            // ── Normal player input ─────────────────────────────
             switch(e.code) {
                 case 'ArrowLeft':
                 case 'KeyA':
@@ -809,6 +975,8 @@
         });
 
         document.addEventListener('keyup', (e) => {
+            if (spectatorActive) return; // no game inputs in spectator mode
+
             switch(e.code) {
                 case 'ArrowLeft':
                 case 'KeyA':
@@ -1027,31 +1195,53 @@
                     break;
                 }
             }
-            
-// Camera zoom factor - higher values = more zoomed in
-             const CAMERA_ZOOM = 1.3;
-             
-             // ---- Update 3D audio listener position (local player) ----
-             if (audioCtx && audioManager && localPlayer) {
-                 audioManager.updateListener(localPlayer.x + PLAYER_WIDTH / 2,
-                                              localPlayer.y + PLAYER_HEIGHT / 2);
-                 
-                 // Update camera bounds for screen visibility checks
-                 const viewWorldWidth = canvas.width / CAMERA_ZOOM;
-                 const viewWorldHeight = canvas.height / CAMERA_ZOOM;
-                 audioManager.updateCamera(localPlayer.x - viewWorldWidth / 2,
-                                          localPlayer.y - viewWorldHeight / 2,
+
+            // ── Camera: normal (follow local player) or spectator (free / tracked) ──
+            let cameraCX, cameraCY;
+            const CAMERA_ZOOM = spectatorActive ? spectatorCameraZoom : 1.3;
+
+            if (spectatorActive && spectatorTargetId !== null) {
+                // ── Spectator: camera locked to targeted entity ─────────────────
+                const target = interpolatedPlayers.find(p => p.id === spectatorTargetId);
+                if (target) {
+                    cameraCX = target.x + PLAYER_WIDTH  / 2;
+                    cameraCY = target.y + PLAYER_HEIGHT / 2;
+                } else {
+                    // Target vanished — fall back to free camera
+                    cameraCX = spectatorCamera.x;
+                    cameraCY = spectatorCamera.y;
+                }
+            } else if (spectatorActive) {
+                // ── Spectator: free-camera (WASD moves spectatorCamera) ─────────
+                cameraCX = spectatorCamera.x;
+                cameraCY = spectatorCamera.y;
+            } else {
+                // ── Normal: follow local player ──────────────────────────────────
+                if (localPlayer) {
+                    cameraCX = localPlayer.x + PLAYER_WIDTH  / 2;
+                    cameraCY = localPlayer.y + PLAYER_HEIGHT / 2;
+                }
+            }
+
+            // ---- Update 3D audio listener position ──────────────────────────────
+            if (audioCtx && audioManager && cameraCX !== undefined) {
+                audioManager.updateListener(cameraCX, cameraCY);
+
+                // Update camera bounds for screen visibility checks
+                const viewWorldWidth  = canvas.width / CAMERA_ZOOM;
+                const viewWorldHeight = canvas.height / CAMERA_ZOOM;
+                audioManager.updateCamera(cameraCX - viewWorldWidth / 2,
+                                          cameraCY - viewWorldHeight / 2,
                                           viewWorldWidth, viewWorldHeight);
-             }
-             
-             ctx.save();
-            
-            // Apply zoom centered on local player
-            if (localPlayer) {
-                // Translate to center of screen, scale up, then translate to player position
+            }
+
+            ctx.save();
+
+            // Apply zoom centred on camera point
+            if (cameraCX !== undefined) {
                 ctx.translate(canvas.width / 2, canvas.height / 2);
                 ctx.scale(CAMERA_ZOOM, CAMERA_ZOOM);
-                ctx.translate(-localPlayer.x, -localPlayer.y);
+                ctx.translate(-cameraCX, -cameraCY);
             } else {
                 ctx.translate(0, 0);
             }
@@ -1097,6 +1287,8 @@
             
             // Draw players with interpolation
             for (const player of interpolatedPlayers) {
+                // Skip local player entity in spectator mode (they're removed from the world visually)
+                if (spectatorActive && player.id === myPlayerId) continue;
                 drawPlayer(player);
             }
             
@@ -1115,17 +1307,25 @@
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
             
-            // Render mini-map
-            if (worldWidth > 0 && worldHeight > 0) {
+             if (worldWidth > 0 && worldHeight > 0) {
                 minimapCtx.fillStyle = '#0d0d0d';
                 minimapCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
                 
-                // Find local player for camera center
-                let localPlayer = null;
-                for (const player of interpolatedPlayers) {
-                    if (player.id === myPlayerId) {
-                        localPlayer = player;
-                        break;
+                // ── Mini-map camera: mirrors spectator state ────────────────────
+                let mapCamX, mapCamY;
+                if (spectatorActive) {
+                    // Target entity
+                    if (spectatorTargetId !== null) {
+                        const trg = interpolatedPlayers.find(p => p.id === spectatorTargetId);
+                        if (trg) { mapCamX = trg.x; mapCamY = trg.y; }
+                    }
+                    // Free camera fallback
+                    if (mapCamX === undefined) { mapCamX = spectatorCamera.x; }
+                    if (mapCamY === undefined) { mapCamY = spectatorCamera.y; }
+                } else {
+                    // Normal: center minimap on local player
+                    for (const p of interpolatedPlayers) {
+                        if (p.id === myPlayerId) { mapCamX = p.x; mapCamY = p.y; break; }
                     }
                 }
                 
@@ -1134,14 +1334,10 @@
                 const viewWidth = worldWidth * zoomLevel;
                 const viewHeight = worldHeight * zoomLevel;
                 
-                // Camera position on mini-map (centered on local player)
-                let cameraX = 0;
-                let cameraY = 0;
-                if (localPlayer) {
-                    cameraX = localPlayer.x - viewWidth / 2;
-                    cameraY = localPlayer.y - viewHeight / 2;
-                }
-                
+                // Camera position on mini-map
+                let cameraX = mapCamX !== undefined ? mapCamX - viewWidth  / 2 : 0;
+                let cameraY = mapCamY !== undefined ? mapCamY - viewHeight / 2 : 0;
+
                 // Clamp camera to world bounds
                 cameraX = Math.max(0, Math.min(cameraX, worldWidth - viewWidth));
                 cameraY = Math.max(0, Math.min(cameraY, worldHeight - viewHeight));
@@ -1161,10 +1357,15 @@
                 
                 // Draw players on mini-map
                 for (const player of interpolatedPlayers) {
+                    // Hide local player dot in spectator mode (they don't have a visible body)
+                    if (spectatorActive && player.id === myPlayerId) continue;
+
                     const minimapX = (player.x - cameraX) * scaleX;
                     const minimapY = (player.y - cameraY) * scaleY;
                     
-                    if (player.id === myPlayerId) {
+                    if (spectatorActive && player.id === spectatorTargetId) {
+                        minimapCtx.fillStyle = '#b7e057'; // bright highlight for spectated target
+                    } else if (player.id === myPlayerId) {
                         minimapCtx.fillStyle = '#666';
                     } else {
                         minimapCtx.fillStyle = player.color;
@@ -1175,7 +1376,10 @@
                     minimapCtx.fill();
                 }
             }
-            
+
+            // Refresh spectator entity list each frame
+            refreshSpectatorUI();
+
             requestAnimationFrame(render);
         }
 
@@ -1435,6 +1639,170 @@
          }
 
         render();
+
+        // ============================================================
+        // SPECTATOR MODE — helper functions, event binding, render hooks
+        // ============================================================+
+
+        function toggleSpectator() {
+            spectatorActive = !spectatorActive;
+
+            if (spectatorActive) {
+                // Lock camera at current local-player position
+                for (const [id, states] of playerStates) {
+                    const s = getInterpolatedPlayerState(id);
+                    if (id === myPlayerId && s) {
+                        spectatorCamera.x = s.x + PLAYER_WIDTH / 2;
+                        spectatorCamera.y = s.y + PLAYER_HEIGHT / 2;
+                        break;
+                    }
+                }
+                spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM;
+                spectatorTargetId = null;
+
+                 // Zero out all local movement inputs so the server never sees them
+                 inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
+                 if (ws && ws.readyState === WebSocket.OPEN) {
+                     ws.send(JSON.stringify({
+                         type: 'input',
+                         inputs: { left: false, right: false, jump: false, attack: false, down: false, isSpectator: true }
+                     }));
+                 }
+
+                buildSpectatorEntityList();
+                document.getElementById('spectatorPanel').style.display = 'block';
+                document.getElementById('spectatorCloseBtn').style.display = 'block';
+
+                // Close button
+                document.getElementById('spectatorCloseBtn').onclick = (e) => {
+                    e.stopPropagation();
+                    exitSpectator();
+                };
+
+                // Mouse wheel zoom in / out
+                const scrollHandler = (e) => {
+                    if (!spectatorActive) return;
+                    // Allow scroll only when pointer is over the panel (or anywhere)
+                    // Using PageY to always respond so scroll zones outside viewport still zoom
+                    spectatorCameraZoom = Math.max(0.25, Math.min(4.0,
+                        spectatorCameraZoom - (e.deltaY > 0 ? 0.05 : -0.05)));
+                    e.preventDefault();
+                };
+                document.addEventListener('wheel', scrollHandler, { passive: false });
+
+                // Click-to-attach via panel items
+                const listEl = document.getElementById('spectatorList');
+                listEl.onclick = (e) => {
+                    const entry = e.target.closest('[data-entity-id]');
+                    if (entry) {
+                        const id = parseInt(entry.dataset.entityId, 10);
+                        spectatorTargetId = (spectatorTargetId === id) ? null : id;
+                        buildSpectatorEntityList();
+                    }
+                };
+
+                // Click "Free Camera" row
+                const freeLabel = document.getElementById('spectatorFreeLabel');
+                freeLabel.onclick = () => {
+                    spectatorTargetId = null;
+                    buildSpectatorEntityList();
+                };
+
+                // Leave reference so exitSpectator can clean them up
+                window._spectatorScrollHandler = scrollHandler;
+
+                console.log('[Spectator] Activated');
+            } else {
+                exitSpectator();
+            }
+        }
+
+        function exitSpectator() {
+            if (!spectatorActive) return;
+            spectatorActive = false;
+            spectatorTargetId = null;
+
+            // Restore clean inputs
+            inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'input',
+                    inputs: { left: false, right: false, jump: false, attack: false, down: false }
+                }));
+            }
+
+            document.getElementById('spectatorPanel').style.display = 'none';
+            if (window._spectatorScrollHandler) {
+                document.removeEventListener('wheel', window._spectatorScrollHandler, false);
+                delete window._spectatorScrollHandler;
+            }
+            console.log('[Spectator] Deactivated');
+        }
+
+        /** Rebuild the entity list from the current playerStates snapshot. */
+        function buildSpectatorEntityList() {
+            const listEl = document.getElementById('spectatorList');
+            if (!listEl) return;
+
+            // Collect and sort: bots (isBot flag) first, then humans; each group alphabetical
+            const now = Date.now();
+            const entries = [];
+            for (const [id, states] of playerStates) {
+                if (!states || !states.length) continue;
+                const latest = states[states.length - 1];
+                if (!latest) continue;
+                const isBot   = id < 0;
+                const isSelf  = id === myPlayerId;
+                if (isSelf) continue;
+                entries.push({ id, isBot, label: latest.sprite || `#${id}`, color: latest.color });
+            }
+            entries.sort((a, b) => {
+                // Bots group first
+                if (a.isBot !== b.isBot) return a.isBot ? -1 : 1;
+                // Then alphabetical by label
+                return a.label.localeCompare(b.label);
+            });
+
+            let html = '';
+            for (let i = 0; i < entries.length; i++) {
+                const ent     = entries[i];
+                const tag     = ent.isBot ? '[BOT]' : '[P]';
+                const selClass = spectatorTargetId === ent.id ? 'selected' : '';
+                html += `<div class="spectatorEntry ${selClass}" data-entity-id="${ent.id}">
+                    <span class="colourSwatch" style="background-color:${ent.color}"></span>
+                    <span>${tag} ${ent.label}</span>
+                </div>`;
+            }
+
+            listEl.innerHTML = html;
+            updateSpectatorFreeLabel();
+        }
+
+        function updateSpectatorFreeLabel() {
+            const el = document.getElementById('spectatorFreeLabel');
+            if (!el) return;
+            const sel = spectatorTargetId === null ? 'color:#b7e057;' : 'color:#555;';
+            el.innerHTML = spectatorTargetId === null
+                ? '&gt; Free Camera'
+                : '&gt; Free Camera';
+            el.setAttribute('style', sel);
+        }
+
+        function selectSpectatorTargetByIndex(index) {
+            const listEl = document.getElementById('spectatorList');
+            if (!listEl) return;
+            const allEntries = listEl.querySelectorAll('.spectatorEntry');
+            if (index < 0 || index >= allEntries.length) return;
+
+            const id = parseInt(allEntries[index].dataset.entityId, 10);
+            spectatorTargetId = (spectatorTargetId === id) ? null : id;
+            buildSpectatorEntityList();
+        }
+
+        /** Call every frame to keep the entity list fresh with current world state. */
+        function refreshSpectatorUI() {
+            if (spectatorActive) buildSpectatorEntityList();
+        }
     </script>
 </body>
 </html>

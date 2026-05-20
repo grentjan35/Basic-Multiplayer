@@ -561,12 +561,12 @@ class BotAI {
         var closestHuman = null;
         var closestHumanDist = Infinity;
 
-        // ---- PASS 1: collect raw candidates ----
+         // ---- PASS 1: collect raw candidates ----
         for (var pair of playerMap) {
             var id = pair[0];
             var data = pair[1];
             var player = data.player;
-            if (id === this.playerId || player.isDead) continue;
+            if (id === this.playerId || player.isDead || player.isSpectator) continue;
 
             var dx = player.x - botPlayer.x;
             var dy = player.y - botPlayer.y;
@@ -603,14 +603,14 @@ class BotAI {
                 continue;
             }
 
-            if (dist < closestDist) {
-                closestDist = dist;
-                closestTarget = player;
-            }
-        }
+             if (dist < closestDist) {
+                 closestDist = dist;
+                 closestTarget = player;
+             }
+         }
 
-        // ---- PASS 2: count how many bots are already targeting each candidate ----
-        var targetCounts = new Map();
+         // ---- PASS 2: count how many bots are already targeting each candidate ----
+         var targetCounts = new Map();
 
         for (var pair2 of playerMap) {
             var id2 = pair2[0];
@@ -675,19 +675,19 @@ class BotAI {
         this.attackActive = false;
     }
 
-    // Check for physical body contact with any player (human or bot)
-    // If this bot bumps into or is bumped by a bot, it will attack
-    checkContactTargets(botPlayer, playerMap) {
-        for (const [id, { player }] of playerMap) {
-            if (id === this.playerId || player.isDead) continue;
-            if (playersAreColliding(botPlayer, player)) {
-                this.targetPlayerId = id;
-                this.targetLockTimer = 120; // hold target for 4 seconds on contact
-                this.state = 'ATTACK';
-                return;
-            }
-        }
-    }
+     // Check for physical body contact with any player (human or bot)
+     // If this bot bumps into or is bumped by a bot, it will attack
+     checkContactTargets(botPlayer, playerMap) {
+         for (const [id, { player }] of playerMap) {
+             if (id === this.playerId || player.isDead || player.isSpectator) continue;
+             if (playersAreColliding(botPlayer, player)) {
+                 this.targetPlayerId = id;
+                 this.targetLockTimer = 120; // hold target for 4 seconds on contact
+                 this.state = 'ATTACK';
+                 return;
+             }
+         }
+     }
 
     canAttackTarget(botPlayer, targetPlayer, platforms) {
         if (!targetPlayer) return false;
