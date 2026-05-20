@@ -3,7 +3,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const botAI = require('./botAI');
-const hotelGen = require('./hotelGenerator');
 
 // Server configuration
 const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
@@ -116,36 +115,109 @@ function loadAssets() {
 // Initialize platforms - hotel-centric world
 function initPlatforms() {
     platforms = [];
-    
     // =========================================================
     // GROUND - Full width across entire world
     // =========================================================
     platforms.push({ x: 0, y: WORLD_HEIGHT - 100, w: WORLD_WIDTH, h: 100 });
     
     // =========================================================
-    // PROCEDURAL HOTEL (center of map)
-    // Generates a complete 6-story hotel with:
-    //   - Ground floor: Lobby with reception, pool, bar, restaurant
-    //   - Floors 2-3: Guest rooms with beds and desks
-    //   - Floor 4: Executive suites with bar
-    //   - Floors 5-6: Penthouse levels with pools and bars
-    //   - Full staircases connecting all floors
-    //   - Exterior balconies
-    //   - Rooftop area with railings
+    // HOTEL - Made of simple platforms only (no complex generator)
     // =========================================================
-    const hotelPlatforms = hotelGen.generateHotel({
-        buildingWidth: 1600,
-        floorCount: 6,
-        floorHeight: 280,
-        hallwayWidth: 120,
-        roomWidth: 150,
-        worldX: 2500,
-        worldY: 120
-    });
+    const hotelTx  = 2500;
+    const hotelBw  = 1600;
+    const hotelWY  = 120;
+    const hotelFC  = 6;
+    const hotelFH  = 280;
+    const hotelLx  = hotelTx - hotelBw / 2;        // 2100
+    const hotelRx  = hotelLx + hotelBw;            // 3700
+    function hotelFloorY(f) { return hotelWY + (hotelFC - 1 - f) * hotelFH; }
     
-    for (const plat of hotelPlatforms) {
-        platforms.push(plat);
+    // Build hotel floor by floor - each floor is just platforms (no rooms, no hallways)
+    for (let f = 0; f < hotelFC; f++) {
+        const floorY = hotelFloorY(f);
+        const floorThickness = 16;
+        
+        // Floor slab (main walking surface)
+        platforms.push({ x: hotelLx, y: floorY, w: hotelBw, h: floorThickness });
+        
+        // Left wall (full height of floor) with entrance gaps
+        const wallHeight = hotelFH - floorThickness;
+        const wallY = floorY - wallHeight;
+        
+        // Left wall with entrance on each floor
+        const leftEntranceY = floorY - 150;
+        platforms.push({ x: hotelLx - 8, y: wallY, w: 8, h: leftEntranceY - wallY });
+        platforms.push({ x: hotelLx - 8, y: leftEntranceY + 80, w: 8, h: wallY + wallHeight - (leftEntranceY + 80) });
+        
+        // Right wall with entrance on each floor
+        const rightEntranceY = floorY - 150;
+        platforms.push({ x: hotelRx, y: wallY, w: 8, h: rightEntranceY - wallY });
+        platforms.push({ x: hotelRx, y: rightEntranceY + 80, w: 8, h: wallY + wallHeight - (rightEntranceY + 80) });
+        
+        // Ceiling platform (top boundary of floor space)
+        if (f < hotelFC - 1) {
+            platforms.push({ x: hotelLx, y: floorY - hotelFH, w: hotelBw, h: 8 });
+        }
     }
+    
+    // =========================================================
+    // SIDE ENTRANCES - Allow jumping between floors from sides
+    // =========================================================
+    // Left side entrances (from map edge toward hotel)
+    for (let f = 0; f < hotelFC; f++) {
+        const floorY = hotelFloorY(f);
+        const entranceX = hotelLx - 300;
+        const entranceY = floorY - 100;
+        platforms.push({ x: entranceX, y: entranceY, w: 100, h: 16 });
+    }
+    
+    // Right side entrances (from hotel toward map edge)
+    for (let f = 0; f < hotelFC; f++) {
+        const floorY = hotelFloorY(f);
+        const entranceX = hotelRx + 150;
+        const entranceY = floorY - 100;
+        platforms.push({ x: entranceX, y: entranceY, w: 100, h: 16 });
+    }
+    
+    // Roof (top floor ceiling)
+    const topFloorY = hotelFloorY(0);
+    platforms.push({ x: hotelLx, y: topFloorY - hotelFH, w: hotelBw, h: 16 });
+    
+    // =========================================================
+    // STAIRS - Proper stepped platforms connecting floors
+    // =========================================================
+    const stairX = hotelRx + 20;  // To the right of the hotel
+    const stairW = 120;
+    const stepsPerFlight = 8;
+    
+    for (let fl = 0; fl < hotelFC - 1; fl++) {
+        const lowerY = hotelFloorY(fl);
+        const upperY = hotelFloorY(fl + 1);
+        const gap = lowerY - upperY;
+        const stepH = gap / stepsPerFlight;
+        
+        // Lower flight (from upper floor down to midpoint)
+        for (let s = 1; s <= stepsPerFlight; s++) {
+            const stepY = upperY + s * stepH;
+            platforms.push({ x: stairX, y: stepY, w: stairW, h: 8 });
+        }
+        
+        // Upper flight (from midpoint down to lower floor)
+        for (let s = 0; s < stepsPerFlight; s++) {
+            const stepY = lowerY - s * stepH;
+            platforms.push({ x: stairX, y: stepY, w: stairW, h: 8 });
+        }
+    }
+    
+    // =========================================================
+    // GROUND-LEVEL ACCESS PLATFORMS near hotel entrances
+    // =========================================================
+    // Front entrance area
+    platforms.push({ x: hotelLx + 600, y: hotelFloorY(hotelFC - 1) - 8, w: 400, h: 16 });
+    // Left approach
+    platforms.push({ x: 1800, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
+    // Right approach
+    platforms.push({ x: 3000, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
     
     // =========================================================
     // SURROUNDING PLATFORMS - around the hotel
@@ -233,17 +305,7 @@ function initPlatforms() {
         }
     }
     
-    // =========================================================
-    // GROUND-LEVEL ACCESS PLATFORMS near hotel entrances
-    // =========================================================
-    // Front entrance
-    platforms.push({ x: 2300, y: WORLD_HEIGHT - 180, w: 400, h: 16 });
-    // Left approach
-    platforms.push({ x: 1800, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
-    // Right approach
-    platforms.push({ x: 3000, y: WORLD_HEIGHT - 250, w: 200, h: 16 });
-    
-    console.log(`Initialized ${platforms.length} platforms across the world (${platforms.length - 12} from hotel generator)`);
+    console.log(`Initialized ${platforms.length} platforms across the world`);
 }
 
 // Create HTTP server for serving static files
