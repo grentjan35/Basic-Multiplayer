@@ -540,35 +540,38 @@ function setDebugMode(enabled) {
 }
 
 function renderDebugPaths(ctx, worldX, worldY, scale) {
-    if (!debugMode) return;
+    if (!showBotPaths) return;
+    if (botPaths.size === 0) return;
     
-    ctx.save();
-    ctx.translate(-worldX, -worldY);
-    
+    // Draw directly in world coords (camera transform is already active from render())
     for (const [botId, path] of botPaths) {
         if (path.length < 2) continue;
         
+        const hue = ((botId < 0 ? -botId : botId) * 47 + 180) % 360;
+        
         ctx.beginPath();
-        ctx.strokeStyle = 'hsl(' + (botId * 30 % 360) + ', 70%, 50%)';
-        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'hsl(' + hue + ', 80%, 55%)';
+        ctx.lineWidth = 3 / (scale || 1.3);
         ctx.setLineDash([10, 5]);
         
-        for (let i = 0; i < path.length - 1; i++) {
-            ctx.moveTo(path[i].x, path[i].y);
-            ctx.lineTo(path[i + 1].x, path[i + 1].y);
+        ctx.moveTo(path[0].x, path[0].y);
+        for (let i = 1; i < path.length; i++) {
+            ctx.lineTo(path[i].x, path[i].y);
         }
-        
         ctx.stroke();
         
-        ctx.fillStyle = 'hsl(' + (botId * 30 % 360) + ', 70%, 50%)';
+        // Draw waypoint circles
         for (const point of path) {
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = 'hsl(' + hue + ', 80%, 55%)';
+            ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
             ctx.fill();
+            // Outline
+            ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
         }
     }
-    
-    ctx.restore();
 }
 let showBotPaths = false;
 
@@ -1134,6 +1137,16 @@ let showBotPaths = false;
                     
                     playerCount.textContent = `Players: ${data.players.length}`;
                     
+                    // ---- Store bot paths from server (for Shift+D debug) ----
+                    if (data.botPaths) {
+                        botPaths.clear();
+                        for (const [botId, pathData] of Object.entries(data.botPaths)) {
+                            if (pathData && pathData.length > 1) {
+                                botPaths.set(parseInt(botId), pathData);
+                            }
+                        }
+                    }
+                    
 // ---- Server-sent audio events (3D spatial) ----
                      if (Array.isArray(data.audioEvents)) {
                          for (const ev of data.audioEvents) {
@@ -1240,6 +1253,16 @@ let showBotPaths = false;
                 e.preventDefault();
                 showBotPaths = !showBotPaths;
                 console.log('Bot paths debug:', showBotPaths ? 'ON' : 'OFF');
+                // Tell the server to start/stop sending bot path data
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'debug',
+                        debugBotPaths: showBotPaths
+                    }));
+                }
+                if (showBotPaths) {
+                    console.log('Bot path debug ON - server will send path data');
+                }
                 return;
             }
 
@@ -1598,26 +1621,10 @@ let showBotPaths = false;
             }
 
             // Draw bot paths on top if debug mode is enabled (Shift+D)
-            if (showBotPaths && typeof botAI !== 'undefined' && botAI.renderDebugPaths) {
-                // Get world camera bounds
-                let camX, camY;
-                if (spectatorActive && spectatorTargetId !== null) {
-                    const target = interpolatedPlayers.find(p => p.id === spectatorTargetId);
-                    if (target) {
-                        camX = target.x - canvas.width / (2 * 1.3) + cameraCX;
-                        camY = target.y - canvas.height / (2 * 1.3) + cameraCY;
-                    }
-                } else if (spectatorActive) {
-                    camX = spectatorCamera.x - canvas.width / (2 * 1.3) + cameraCX;
-                    camY = spectatorCamera.y - canvas.height / (2 * 1.3) + cameraCY;
-                } else if (localPlayer) {
-                    camX = localPlayer.x - canvas.width / (2 * 1.3) + cameraCX;
-                    camY = localPlayer.y - canvas.height / (2 * 1.3) + cameraCY;
-                }
-                
-                if (camX !== undefined) {
-                    botAI.renderDebugPaths(ctx, camX, camY, 1.3);
-                }
+            if (showBotPaths && botPaths.size > 0) {
+                // Camera transform is already active (ctx already translated/scaled),
+                // so we draw paths directly in world-space coordinates
+                renderDebugPaths(ctx, 0, 0, CAMERA_ZOOM);
             }
             
             ctx.restore();

@@ -22,6 +22,54 @@ const GROUND_EDGE_Y = WORLD_HEIGHT - 350;  // y-coord below which any platform c
     const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET;
 
 // ============================================================
+// PATH RESERVATION SYSTEM - Prevents bots from clogging same routes
+// ============================================================
+// Each bot reserves platform graph nodes along their path.
+// Other bots' A* sees inflated costs on reserved nodes,
+// naturally routing them around.
+const PATH_RESERVATION_EXPIRE_TICKS = 90; // 3 seconds @ 30 TPS
+const RESERVATION_PENALTY = 80; // cost added per reserved node
+let botPathReservations = new Map(); // platformIdx -> { botId, expiresAt }
+
+function reservePath(botId, pathNodeIndices, currentTick) {
+    const expireAt = currentTick + PATH_RESERVATION_EXPIRE_TICKS;
+    for (const nodeIdx of pathNodeIndices) {
+        botPathReservations.set(nodeIdx, { botId, expiresAt: expireAt });
+    }
+}
+
+function clearExpiredReservations(currentTick) {
+    const toDelete = [];
+    for (const [nodeIdx, reservation] of botPathReservations) {
+        if (currentTick > reservation.expiresAt) {
+            toDelete.push(nodeIdx);
+        }
+    }
+    for (const nodeIdx of toDelete) {
+        botPathReservations.delete(nodeIdx);
+    }
+}
+
+function getReservationPenalty(nodeIdx, requestingBotId) {
+    const reservation = botPathReservations.get(nodeIdx);
+    if (!reservation) return 0;
+    if (reservation.botId === requestingBotId) return 0; // own reservation no penalty
+    return RESERVATION_PENALTY;
+}
+
+// Collect all bot paths for debug visualization on clients
+function getBotPathsForDebug() {
+    const botAIs = global.botAIs || new Map();
+    const paths = {};
+    for (const [id, ai] of botAIs) {
+        if (ai.path && ai.path.length > 1) {
+            paths[id] = ai.path.map(wp => ({ x: Math.round(wp.x), y: Math.round(wp.y) }));
+        }
+    }
+    return paths;
+}
+
+// ============================================================
 // PLATFORM GRAPH - Navigation graph for pathfinding
 // ============================================================
 let platformGraph = null;
@@ -58,12 +106,16 @@ function buildPlatformGraph(platforms) {
             // --- Jump up connections ---
             if (centerDist < MAX_HORIZONTAL_JUMP_DIST && vDist > 0) {
                 if (b.y < a.y) {
-                    // b is above a
+                    // b is above a (jumping UP from a to b)
                     const heightDiff = a.y - b.y;
-                    if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !isBlockedVertical(platforms, a, b)) {
+                    // Only check for blocked vertical if the lower platform isn't 
+                    // the ground floor (which spans the whole world and would block everything)
+                    const isGroundPlatform = a.w > 1000 && a.y > WORLD_HEIGHT - 500;
+                    const blocked = isGroundPlatform ? false : isBlockedVertical(platforms, a, b);
+                    if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !blocked) {
                         const cost = 3 + heightDiff / 50 + centerDist / 300;
                         graph[i].push({ to: j, action: 'jump', cost });
-                    } else if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !isBlockedVertical(platforms, a, b)) {
+                    } else if (heightDiff <= MAX_SINGLE_JUMP_HEIGHT && !blocked) {
                         const cost = 5 + heightDiff / 50 + centerDist / 200;
                         graph[i].push({ to: j, action: 'jump', cost });
                     }
@@ -89,7 +141,9 @@ function buildPlatformGraph(platforms) {
                     // CORNER → EDGE (upward): right edge of lower platform → nearest vertical edge of upper platform
                     const nearestEdgeX = b.x > aRight ? b.x : b.x + b.w; // edge that is "outward" relative to the lower platform
                     const throwDist = Math.sqrt(Math.pow(nearestEdgeX - aRight, 2) + Math.pow(b.y - a.y, 2));
-                    if (throwDist < MAX_HORIZONTAL_JUMP_DIST && !isBlockedVertical(platforms, a, b)) {
+                    const isGroundPlatform = a.w > 1000 && a.y > WORLD_HEIGHT - 500;
+                    const blocked = isGroundPlatform ? false : isBlockedVertical(platforms, a, b);
+                    if (throwDist < MAX_HORIZONTAL_JUMP_DIST && !blocked) {
                         const action = 'jump';
                         const cost = 5 + throwDist / 200;
                         graph[i].push({ to: j, action, cost });
@@ -122,8 +176,8 @@ function isBlockedVertical(platforms, a, b) {
     return false;
 }
 
-// A* pathfinding on platform graph
-function findPathInGraph(graph, startNode, endNode) {
+// A* pathfinding on platform graph (with reservation-aware costs)
+function findPathInGraph(graph, startNode, endNode, requestingBotId) {
     if (startNode === endNode) return [startNode];
     if (!graph[startNode] || !graph[endNode]) return [startNode];
 
@@ -161,7 +215,9 @@ function findPathInGraph(graph, startNode, endNode) {
         const neighbors = graph[current] || [];
         for (const edge of neighbors) {
             const neighbor = edge.to;
-            const tentativeG = (gScore.get(current) || Infinity) + edge.cost;
+            // Add reservation penalty if this node is claimed by another bot
+            const reservationPenalty = getReservationPenalty(neighbor, requestingBotId);
+            const tentativeG = (gScore.get(current) || Infinity) + edge.cost + reservationPenalty;
 
             if (tentativeG < (gScore.get(neighbor) || Infinity)) {
                 cameFrom.set(neighbor, current);
@@ -524,6 +580,11 @@ class BotAI {
         this.botCollisionTimer = 0;
         this.collidingBotIds = [];
         this.lastCollisionCheck = 0;
+
+        // Path recalculation throttle
+        this.pathRecalcTimer = 0;
+        this.lastPathTargetX = 0;
+        this.lastPathTargetY = 0;
 
         // Momentum tracking
         this.momentumState = 'NONE'; // NONE, BACKING_UP, SPRINTING, JUMPING
@@ -968,47 +1029,64 @@ class BotAI {
         // Clamp chase target so the bot stops at combat distance
         target = this.getCombatTarget(botPlayer, target);
 
-        // SMART PATHFINDING: Try multiple strategies in order of intelligence
-        let pathFound = false;
+        // --- PATH RECALC THROTTLE: Only recalc path every 10 ticks or when target moves significantly ---
+        const targetMovedSignificantly = Math.abs(target.x - this.lastPathTargetX) > 100 || Math.abs(target.y - this.lastPathTargetY) > 100;
+        const shouldRecalcPath = this.pathRecalcTimer <= 0 || targetMovedSignificantly || this.path.length <= 1;
 
-        // Strategy 1: Direct pathfinding if both on valid platforms
-        if (botPlatIdx >= 0 && targetPlatIdx >= 0) {
-            this.pathfindToTarget(botPlayer, target.x, target.y, platforms);
-            if (this.path.length > 1) {
-                pathFound = true;
-                this.debugInfo += 'DIRECT_PATH ';
-            }
-        }
+        if (shouldRecalcPath) {
+            this.pathRecalcTimer = 10; // Don't recalc for 10 ticks
+            this.lastPathTargetX = target.x;
+            this.lastPathTargetY = target.y;
 
-        // Strategy 2: Multi-hop climbing for elevated targets
-        if (!pathFound && botPlatIdx >= 0 && targetPlatIdx >= 0) {
-            const botPlatY = platforms[botPlatIdx].y;
-            const targetPlatY = platforms[targetPlatIdx].y;
+            // SMART PATHFINDING: Try multiple strategies in order of intelligence
+            let pathFound = false;
 
-            if (targetPlatY < botPlatY - 50) { // Target is significantly above
-                const climbPath = this.findVerticalClimbPath(botPlayer, platforms, botPlatIdx, targetPlatIdx, target.x, target.y);
-                if (climbPath && climbPath.length > 1) {
-                    this.path = climbPath;
-                    this.pathIndex = 0;
+            // Strategy 1: Direct pathfinding if both on valid platforms
+            if (botPlatIdx >= 0 && targetPlatIdx >= 0) {
+                this.pathfindToTarget(botPlayer, target.x, target.y, platforms, currentTick);
+                if (this.path.length > 1) {
                     pathFound = true;
-                    this.debugInfo += 'CLIMB_PATH ';
+                    this.debugInfo += 'DIRECT_PATH ';
                 }
             }
-        }
 
-        // Strategy 3: Smart intermediate platform routing
-        if (!pathFound && botPlatIdx >= 0) {
-            const intermediatePath = this.findSmartRoute(botPlayer, target, platforms);
-            if (intermediatePath && intermediatePath.length > 0) {
-                this.path = intermediatePath;
-                this.pathIndex = 0;
-                pathFound = true;
-                this.debugInfo += 'SMART_ROUTE ';
+            // Strategy 2: Multi-hop climbing for elevated targets
+            if (!pathFound && botPlatIdx >= 0 && targetPlatIdx >= 0) {
+                const botPlatY = platforms[botPlatIdx].y;
+                const targetPlatY = platforms[targetPlatIdx].y;
+
+                if (targetPlatY < botPlatY - 50) { // Target is significantly above
+                    const climbPath = this.findVerticalClimbPath(botPlayer, platforms, botPlatIdx, targetPlatIdx, target.x, target.y);
+                    if (climbPath && climbPath.length > 1) {
+                        this.path = climbPath;
+                        this.pathIndex = 0;
+                        pathFound = true;
+                        this.debugInfo += 'CLIMB_PATH ';
+                    }
+                }
             }
+
+            // Strategy 3: Smart intermediate platform routing
+            if (!pathFound && botPlatIdx >= 0) {
+                const intermediatePath = this.findSmartRoute(botPlayer, target, platforms);
+                if (intermediatePath && intermediatePath.length > 0) {
+                    this.path = intermediatePath;
+                    this.pathIndex = 0;
+                    pathFound = true;
+                    this.debugInfo += 'SMART_ROUTE ';
+                }
+            }
+
+            // If no path found via strategies, signal fallback
+            if (!pathFound) {
+                this.path = []; // Clear path so followPath logic knows to use smartDirectMove
+            }
+        } else {
+            this.pathRecalcTimer--;
         }
 
-        // Execute movement
-        if (pathFound && this.path.length > 0) {
+        // Execute movement - use existing path if valid, otherwise fallback
+        if (this.path.length > 1 && this.pathIndex < this.path.length) {
             this.followPath(botPlayer, platforms, currentTick);
         } else {
             // Fallback: intelligent direct movement
@@ -1388,7 +1466,7 @@ class BotAI {
 
         // If we found a good intermediate, build path through it
         if (bestClimbPlat >= 0) {
-            const graphPath = findPathInGraph(platformGraph, botPlatIdx, bestClimbPlat);
+            const graphPath = findPathInGraph(platformGraph, botPlatIdx, bestClimbPlat, this.playerId);
             if (graphPath.length > 1) {
                 const waypoints = [];
                 for (const nodeIdx of graphPath) {
@@ -1518,7 +1596,7 @@ class BotAI {
     // PATHFINDING & MOVEMENT
     // ============================================================
 
-    pathfindToTarget(botPlayer, targetX, targetY, platforms) {
+    pathfindToTarget(botPlayer, targetX, targetY, platforms, currentTick) {
         const botPlatform = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
         const targetPlatform = findTargetPlatform(targetX, targetY, platforms);
 
@@ -1553,16 +1631,16 @@ class BotAI {
             graphBuildVersion = platforms.length;
         }
 
-        // Find path in graph
-        let nodePath = findPathInGraph(platformGraph, botPlatform, targetPlatform);
+        // Find path in graph (with reservation awareness)
+        let nodePath = findPathInGraph(platformGraph, botPlatform, targetPlatform, this.playerId);
 
         // If no direct path found, try alternative strategies
         if (nodePath.length <= 1) {
             // Strategy 1: Find intermediate platforms that can bridge the gap
             const bridgePlatform = this.findBestBridgePlatform(botPlatform, targetPlatform, platforms);
             if (bridgePlatform !== null) {
-                const pathToBridge = findPathInGraph(platformGraph, botPlatform, bridgePlatform);
-                const pathFromBridge = findPathInGraph(platformGraph, bridgePlatform, targetPlatform);
+                const pathToBridge = findPathInGraph(platformGraph, botPlatform, bridgePlatform, this.playerId);
+                const pathFromBridge = findPathInGraph(platformGraph, bridgePlatform, targetPlatform, this.playerId);
                 
                 if (pathToBridge.length > 1 && pathFromBridge.length > 1) {
                     // Combine paths, removing duplicate bridge platform
@@ -1591,12 +1669,18 @@ class BotAI {
                     wayX = this.calculateOptimalWaypointPosition(p, nextP, targetX);
                 }
                 
+                // CRITICAL: Use p.y - PLAYER_HEIGHT for Y since players stand ON TOP of the platform.
+                // platform.y is the top surface. A player stands at platform.y - PLAYER_HEIGHT.
+                // Without this, waypoints are 60px above where the bot can actually stand.
                 this.path.push({
                     x: wayX,
-                    y: p.y,
+                    y: p.y - PLAYER_HEIGHT,
                     platformIndex: nodeIdx
                 });
             }
+
+            // Reserve the path nodes so other bots avoid them
+            reservePath(this.playerId, nodePath, currentTick);
         } else {
             // Fallback: direct path to target
             this.path.push({
@@ -2118,40 +2202,29 @@ class BotAI {
     // NEW: Calculate optimal run-up distance based on what we're trying to reach
     // ================================================================
     calculateOptimalRunUp(botPlayer, platforms, jumpDirection) {
+        // Determine run‑up needed based on actual physics helper
         const currentPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
-        if (currentPlatIdx < 0) return 100; // Default run-up
-
+        if (currentPlatIdx < 0) return 100;
         const currentPlat = platforms[currentPlatIdx];
         const maxPlatformRunUp = Math.min(250, currentPlat.w * 0.4);
 
-        // Look for what we're trying to jump to
         const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, jumpDirection);
-        
         if (reachablePlatforms.length === 0) {
-            return Math.min(100, maxPlatformRunUp); // Conservative jump
+            return Math.min(100, maxPlatformRunUp);
         }
 
-        // Find the furthest/highest platform we might want to reach
-        let maxDistance = 0;
-        let maxHeight = 0;
-
+        // Use the physics helper to compute required run‑up for each reachable platform
+        let bestRunUp = 0;
         for (const p of reachablePlatforms) {
             const jumpStartX = jumpDirection > 0 ? currentPlat.x + currentPlat.w : currentPlat.x;
-            const horizontalDist = jumpDirection > 0 
+            const hGap = jumpDirection > 0
                 ? Math.max(0, p.x - jumpStartX)
                 : Math.max(0, jumpStartX - (p.x + p.w));
-            const heightDiff = Math.max(0, currentPlat.y - p.y);
-
-            maxDistance = Math.max(maxDistance, horizontalDist);
-            maxHeight = Math.max(maxHeight, heightDiff);
+            const vDist = currentPlat.y - p.y;
+            const { runUpNeeded } = calculateRequiredRunUp(hGap, vDist);
+            if (runUpNeeded > bestRunUp) bestRunUp = runUpNeeded;
         }
-
-        // Calculate run-up needed: more distance/height = more run-up
-        const distanceRunUp = maxDistance * 0.4;
-        const heightRunUp = maxHeight * 0.3;
-        const totalRunUp = Math.max(80, distanceRunUp + heightRunUp);
-
-        return Math.min(totalRunUp, maxPlatformRunUp);
+        return Math.min(bestRunUp, maxPlatformRunUp);
     }
 
     moveTowardWithJump(botPlayer, targetX, targetY, platforms, currentTick, shouldJump) {
@@ -2258,7 +2331,7 @@ class BotAI {
                         graphBuildVersion = platforms.length;
                     }
                     
-                    const nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform);
+                    const nodePath = findPathInGraph(platformGraph, botPlatform, alternativePlatform, this.playerId);
                     this.path = [];
                     for (const nodeIdx of nodePath) {
                         // Validate platform exists before using it
@@ -2503,6 +2576,9 @@ function updateBotAI(players, platforms, worldWidth, worldHeight, currentTick) {
     }
     const botAIs = global.botAIs;
 
+    // Clear expired path reservations before any pathfinding
+    clearExpiredReservations(currentTick);
+
     const humanCount = getHumanPlayerCount(players);
     const currentBotCount = getBotCount(players);
 
@@ -2547,5 +2623,7 @@ module.exports = {
     buildPlatformGraph,
     getBotCount,
     getHumanPlayerCount,
-    BOT_PERSONALITIES
+    BOT_PERSONALITIES,
+    clearExpiredReservations,
+    getBotPathsForDebug
 };

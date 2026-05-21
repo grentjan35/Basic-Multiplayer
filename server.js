@@ -59,6 +59,9 @@ const players = new Map();
 let platforms = [];
 let playerIdCounter = 0;
 
+// Debug mode - when enabled, bot paths are sent to clients for visualization
+let debugMode = false;
+
 // Preloaded assets (base64 encoded for secure transmission via WebSocket)
 let spritesheetData = null;
 const characterImages = {}; // character name -> base64 PNG data URL
@@ -1165,13 +1168,20 @@ function gameLoop() {
         // Don't send state if there are no actual players (only spectators)
         if (playerStates.length === 0) return;
         
-        const message = JSON.stringify({
+        const messageData = {
             type: 'state',
             frame: gameTickCounter,
             snapshotTime,                     // server-side wall-clock at send instant
             players: playerStates,
             audioEvents: audioEvents
-        });
+        };
+        
+        // Include bot path data for debug visualization
+        if (debugMode) {
+            messageData.botPaths = botAI.getBotPathsForDebug();
+        }
+        
+        const message = JSON.stringify(messageData);
         
         for (const [id, { ws }] of players) {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1200,6 +1210,14 @@ wss.on('connection', (ws) => {
      ws.on('message', (message) => {
          try {
              const data = JSON.parse(message);
+             
+             if (data.type === 'debug') {
+                 if (data.debugBotPaths !== undefined) {
+                     debugMode = data.debugBotPaths;
+                     console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
+                 }
+                 return;
+             }
              
              if (data.type === 'input') {
                  const playerData = players.get(playerId);
