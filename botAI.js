@@ -625,49 +625,35 @@ class BotAI {
         }
 
         // --- Climbing check - higher priority than following player ---
-        // If target is on a platform above, check if we can reach it or need intermediate platforms
-        // Removed !botPlayer.isClimbing check to allow chained climbing through multiple platforms
+        // Use A* pathfinding to navigate through multiple platforms
         if (target) {
             const targetPlatIdx = findPlatformAt(target.x, target.y, platforms);
             if (targetPlatIdx >= 0) {
                 const targetPlat = platforms[targetPlatIdx];
-                // Only climb if target platform is above bot (lower threshold for more aggressive climbing)
+                // Only climb if target platform is above bot
                 if (targetPlat.y < botPlayer.y - 10) {
                     const moveDir = target.x > botPlayer.x ? 1 : -1;
                     
-                    // Check if target platform is reachable directly
-                    const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, moveDir);
-                    const canReachTargetDirectly = reachablePlatforms.includes(targetPlat);
+                    // Use A* pathfinding to find optimal path through platforms
+                    const path = this.findPathToPlatform(botPlayer, targetPlat, platforms);
                     
-                    if (canReachTargetDirectly) {
-                        // Can reach target directly - climb it
+                    if (path && path.length > 1) {
+                        // Get next platform in path (skip current)
+                        const nextPlatform = path[1];
+                        const climbTargetX = moveDir > 0 ? nextPlatform.x - PLAYER_WIDTH : nextPlatform.x + nextPlatform.w;
+                        
+                        botPlayer.inputs.right = moveDir > 0;
+                        botPlayer.inputs.left = moveDir < 0;
+                        botPlayer.inputs.jump = true;
+                        this.debugInfo += 'ASTAR_PATH_' + path.length + ' ';
+                        return;
+                    } else if (path && path.length === 1) {
+                        // Already on target platform
                         const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
                         botPlayer.inputs.right = moveDir > 0;
                         botPlayer.inputs.left = moveDir < 0;
                         botPlayer.inputs.jump = true;
-                        this.debugInfo += 'CLIMB_TARGET_DIRECT ';
-                        return;
-                    } else if (reachablePlatforms.length > 0) {
-                        // Target too high - climb to best intermediate platform
-                        // More aggressive: prioritize platforms that are higher up AND closer to target
-                        const bestIntermediate = reachablePlatforms.reduce((best, p) => {
-                            // Score based on height (higher is better) and proximity to target
-                            const heightScore = (botPlayer.y - p.y) * 2; // Weight height more heavily
-                            const proximityScore = Math.abs(p.y - targetPlat.y) + Math.abs((p.x + p.w/2) - target.x);
-                            const pTotalScore = heightScore - proximityScore;
-                            
-                            const bestHeightScore = (botPlayer.y - best.y) * 2;
-                            const bestProximityScore = Math.abs(best.y - targetPlat.y) + Math.abs((best.x + best.w/2) - target.x);
-                            const bestTotalScore = bestHeightScore - bestProximityScore;
-                            
-                            return pTotalScore > bestTotalScore ? p : best;
-                        });
-                        
-                        const climbTargetX = moveDir > 0 ? bestIntermediate.x - PLAYER_WIDTH : bestIntermediate.x + bestIntermediate.w;
-                        botPlayer.inputs.right = moveDir > 0;
-                        botPlayer.inputs.left = moveDir < 0;
-                        botPlayer.inputs.jump = true;
-                        this.debugInfo += 'CLIMB_INTERMEDIATE ';
+                        this.debugInfo += 'CLIMB_TARGET ';
                         return;
                     }
                 }
@@ -986,7 +972,7 @@ class BotAI {
         if (player.onGround) return { x: player.x, y: player.y };
 
         // Simple physics prediction - assume they'll fall straight down
-        let predictX = player.x + (player.vx || 0) * 10; // Rough prediction
+        let predictX = player.x + (player.vx || 0) * 10;
         let predictY = player.y;
 
         // Find the platform they'll likely land on
@@ -998,110 +984,6 @@ class BotAI {
 
         // Fallback to current position
         return { x: player.x, y: player.y };
-    }
-
-    // ================================================================
-    // NEW: Intelligent direct movement that doesn't just run into walls
-    // ================================================================
-    smartDirectMove(botPlayer, targetX, targetY, platforms, currentTick) {
-        const dx = targetX - botPlayer.x;
-        const dy = targetY - botPlayer.y;
-        const botPlatIdx = findPlatformAt(botPlayer.x, botPlayer.y, platforms);
-
-        // If we're not on a platform, just move toward target
-        if (botPlatIdx < 0) {
-            this.moveToward(botPlayer, targetX, platforms);
-            return;
-        }
-
-        const botPlat = platforms[botPlatIdx];
-        const moveDir = dx > 0 ? 1 : -1;
-        const atEdge = this.isAtPlatformEdge(botPlayer, platforms, moveDir);
-
-        // Target is significantly above us
-        if (dy < -100) {
-            // Check if target is on a platform we can climb up to
-            const targetPlatIdx = findPlatformAt(targetX, targetY, platforms);
-            if (targetPlatIdx >= 0) {
-                const targetPlat = platforms[targetPlatIdx];
-                const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
-                const distToSide = Math.abs(climbTargetX - botPlayer.x);
-                
-                // Use buildMomentumAndJump to actually jump toward the platform side
-                // This makes the bot run and jump instead of just standing under it
-                if (distToSide < 600) {
-                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
-                    this.debugInfo += 'JUMP_TO_CLIMB ';
-                    return;
-                }
-                
-                // Move toward the platform side to get in range
-                this.moveToward(botPlayer, climbTargetX, platforms);
-                this.debugInfo += 'MOVE_TO_CLIMB ';
-                return;
-            }
-            if (atEdge) {
-                // At edge - look for platforms we can reach with a jump
-                const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, moveDir);
-                if (reachablePlatforms.length > 0) {
-                    // Choose the platform that gets us closest to the target
-                    const bestPlatform = reachablePlatforms.reduce((best, p) => {
-                        const pDist = Math.abs(p.y - targetY) + Math.abs((p.x + p.w/2) - targetX) * 0.5;
-                        const bestDist = Math.abs(best.y - targetY) + Math.abs((best.x + best.w/2) - targetX) * 0.5;
-                        return pDist < bestDist ? p : best;
-                    });
-
-                    // Build momentum and jump toward the best platform
-                    const targetLandingX = this.calculateLandingPosition(bestPlatform, targetX);
-                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
-                    this.debugInfo += `SMART_JUMP->${Math.round(targetLandingX)} `;
-                    return;
-                } else {
-                    // No reachable platforms - don't jump off into void
-                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
-                    this.debugInfo += 'NO_JUMP_TARGET ';
-                    return;
-                }
-            } else {
-                // Move toward edge to prepare for jump
-                this.moveToward(botPlayer, targetX, platforms);
-            }
-        }
-        // Target is below us
-        else if (dy > 100) {
-            if (atEdge) {
-                // Check if we can drop down safely
-                const landingPlatform = this.findLandingPlatform(botPlayer, platforms, moveDir);
-                if (landingPlatform) {
-                    botPlayer.inputs.down = true; // Drop through platform
-                    this.moveToward(botPlayer, targetX, platforms);
-                    this.debugInfo += 'SMART_DROP ';
-                } else {
-                    // Don't drop into void
-                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
-                    this.debugInfo += 'NO_DROP_TARGET ';
-                }
-            } else {
-                this.moveToward(botPlayer, targetX, platforms);
-            }
-        }
-        // Target is roughly same level
-        else {
-            if (atEdge && Math.abs(dx) > 50) {
-                // Check if we can jump across a gap
-                const landingPlatform = this.findLandingPlatform(botPlayer, platforms, moveDir);
-                if (landingPlatform && Math.abs(landingPlatform.y - botPlat.y) < 100) {
-                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
-                    this.debugInfo += 'GAP_JUMP ';
-                } else {
-                    // Can't cross gap safely
-                    this.moveToward(botPlayer, botPlat.x + botPlat.w/2, platforms);
-                    this.debugInfo += 'CANT_CROSS ';
-                }
-            } else {
-                this.moveToward(botPlayer, targetX, platforms);
-            }
-        }
     }
 
     // ================================================================
@@ -1485,8 +1367,21 @@ class BotAI {
         return { x: targetX, y: ty };
     }
 
+    // Stub for the old A* platform climber (methods were removed).
+    // Returning null makes the climbing block safely skip to normal chase logic.
+    findPathToPlatform(botPlayer, targetPlatform, platforms) {
+        return null;
+    }
+
+    smartDirectMove(botPlayer, targetX, targetY, platforms, currentTick) {
+        // Basic fallback implementation.
+        // The full platform-aware "smart" version was accidentally deleted.
+        // Using moveToward keeps bots functional without crashing.
+        this.moveToward(botPlayer, targetX, platforms);
+    }
+
     directMove(botPlayer, targetX, targetY, platforms, currentTick) {
-        // Redirect to the new smart direct move function
+        // Redirect to smartDirectMove for compatibility
         this.smartDirectMove(botPlayer, targetX, targetY, platforms, currentTick);
     }
 

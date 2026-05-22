@@ -696,10 +696,10 @@ let showBotPaths = false;
                 anim.facingRight = true;
             }
             
-            // Check if player is climbing - show falling/airborne pose
+            // Check if player is climbing - show mid-air pose
             if (playerState.isClimbing) {
-                anim.currentAnimation = 'falling';
-                anim.frameIndex = 0; // falling frame
+                anim.currentAnimation = 'jump';
+                anim.frameIndex = 1; // in_air frame (mid-air pose)
                 return;
             }
             

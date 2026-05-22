@@ -848,9 +848,7 @@ function checkCollision(player) {
             } else {
                 // Check if player is pressing jump (up arrow) while hitting platform side
                 // If so, trigger climbing mechanic
-                // For bots, also trigger climbing even without jump input (makes bot climbing easier)
-                const shouldClimb = player.inputs.jump || (player.isBot && !player.isDead && !player.isClimbing);
-                if (shouldClimb) {
+                if (player.inputs.jump && !player.isDead && !player.isClimbing) {
                     // Start climbing - set target to top of platform
                     player.isClimbing = true;
                     player.climbTimer = 15; // 15 ticks (~0.5 seconds) to climb
@@ -1206,8 +1204,7 @@ function gameLoop() {
                 facingRight: player.facingRight,
                 isDead: player.isDead,
                 opacity: player.opacity,
-                isFadingIn: player.isFadingIn,
-                isClimbing: player.isClimbing
+                isFadingIn: player.isFadingIn
             });
         }
         
