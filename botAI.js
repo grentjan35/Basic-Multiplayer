@@ -626,12 +626,13 @@ class BotAI {
 
         // --- Climbing check - higher priority than following player ---
         // If target is on a platform above, check if we can reach it or need intermediate platforms
-        if (target && !botPlayer.isClimbing) {
+        // Removed !botPlayer.isClimbing check to allow chained climbing through multiple platforms
+        if (target) {
             const targetPlatIdx = findPlatformAt(target.x, target.y, platforms);
             if (targetPlatIdx >= 0) {
                 const targetPlat = platforms[targetPlatIdx];
-                // Only climb if target platform is above bot
-                if (targetPlat.y < botPlayer.y - 20) {
+                // Only climb if target platform is above bot (lower threshold for more aggressive climbing)
+                if (targetPlat.y < botPlayer.y - 10) {
                     const moveDir = target.x > botPlayer.x ? 1 : -1;
                     
                     // Check if target platform is reachable directly
@@ -648,10 +649,18 @@ class BotAI {
                         return;
                     } else if (reachablePlatforms.length > 0) {
                         // Target too high - climb to best intermediate platform
+                        // More aggressive: prioritize platforms that are higher up AND closer to target
                         const bestIntermediate = reachablePlatforms.reduce((best, p) => {
-                            const pDist = Math.abs(p.y - targetPlat.y) + Math.abs((p.x + p.w/2) - target.x);
-                            const bestDist = Math.abs(best.y - targetPlat.y) + Math.abs((best.x + best.w/2) - target.x);
-                            return pDist < bestDist ? p : best;
+                            // Score based on height (higher is better) and proximity to target
+                            const heightScore = (botPlayer.y - p.y) * 2; // Weight height more heavily
+                            const proximityScore = Math.abs(p.y - targetPlat.y) + Math.abs((p.x + p.w/2) - target.x);
+                            const pTotalScore = heightScore - proximityScore;
+                            
+                            const bestHeightScore = (botPlayer.y - best.y) * 2;
+                            const bestProximityScore = Math.abs(best.y - targetPlat.y) + Math.abs((best.x + best.w/2) - target.x);
+                            const bestTotalScore = bestHeightScore - bestProximityScore;
+                            
+                            return pTotalScore > bestTotalScore ? p : best;
                         });
                         
                         const climbTargetX = moveDir > 0 ? bestIntermediate.x - PLAYER_WIDTH : bestIntermediate.x + bestIntermediate.w;
