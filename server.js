@@ -434,6 +434,11 @@ class Player {
         
         // Spectator state
         this.isSpectator = false; // true when player is in spectator mode (camera only)
+        
+        // Climbing state
+        this.isClimbing = false; // true when climbing up a platform side
+        this.climbTimer = 0; // ticks remaining for climb animation
+        this.climbTargetY = 0; // target Y position when climbing
     }
 
     // Generate dark, desaturated colors
@@ -462,6 +467,9 @@ class Player {
         this.fadeTimer = 0;
         this.opacity = 1.0;
         this.isFadingIn = false;
+        this.isClimbing = false;
+        this.climbTimer = 0;
+        this.climbTargetY = 0;
     }
 }
 
@@ -541,6 +549,26 @@ function removePlayer(id) {
 function applyPhysics(player) {
     // Skip physics for spectators - they are just cameras
     if (player.isSpectator) {
+        return;
+    }
+    
+    // Handle climbing mechanic
+    if (player.isClimbing) {
+        player.climbTimer--;
+        
+        // Interpolate Y position towards target
+        const climbSpeed = (player.climbTargetY - player.y) / player.climbTimer;
+        player.y += climbSpeed;
+        
+        // Stop climbing when timer ends
+        if (player.climbTimer <= 0) {
+            player.isClimbing = false;
+            player.y = player.climbTargetY;
+            player.onGround = true;
+            player.vy = 0;
+        }
+        
+        // Skip normal physics while climbing
         return;
     }
     
@@ -700,6 +728,9 @@ function applyPhysics(player) {
             player.fadeTimer = 0;
             player.opacity = 1.0;
             player.isFadingIn = false;
+            player.isClimbing = false;
+            player.climbTimer = 0;
+            player.climbTargetY = 0;
             player.health = 100;
         }
     }
@@ -742,6 +773,9 @@ function applyPhysics(player) {
                     player.fadeTimer = 0;
                     player.opacity = 1.0;
                     player.isFadingIn = false;
+                    player.isClimbing = false;
+                    player.climbTimer = 0;
+                    player.climbTargetY = 0;
                 }
                 player.isFadingIn = true;
                 player.fadeTimer = 30; // ~1 second fade in
@@ -812,7 +846,18 @@ function checkCollision(player) {
                     player.vy = 0;
                 }
             } else {
-                if (overlapLeft < overlapRight) {
+                // Check if player is pressing jump (up arrow) while hitting platform side
+                // If so, trigger climbing mechanic
+                // For bots, also trigger climbing even without jump input (makes bot climbing easier)
+                const shouldClimb = player.inputs.jump || (player.isBot && !player.isDead && !player.isClimbing);
+                if (shouldClimb) {
+                    // Start climbing - set target to top of platform
+                    player.isClimbing = true;
+                    player.climbTimer = 15; // 15 ticks (~0.5 seconds) to climb
+                    player.climbTargetY = plat.y - PLAYER_HEIGHT;
+                    player.vx = 0; // Stop horizontal movement while climbing
+                    player.vy = 0; // Stop vertical movement while climbing
+                } else if (overlapLeft < overlapRight) {
                     // Hitting from left
                     player.x = plat.x - PLAYER_WIDTH; // Push to full sprite width so visual aligns
                     player.vx = 0;
@@ -1161,7 +1206,8 @@ function gameLoop() {
                 facingRight: player.facingRight,
                 isDead: player.isDead,
                 opacity: player.opacity,
-                isFadingIn: player.isFadingIn
+                isFadingIn: player.isFadingIn,
+                isClimbing: player.isClimbing
             });
         }
         

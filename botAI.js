@@ -624,6 +624,28 @@ class BotAI {
             this.targetPlayerId = null;
         }
 
+        // --- Climbing check - higher priority than following player ---
+        // If target is on a platform above, climb that platform
+        if (target && !botPlayer.isClimbing) {
+            const targetPlatIdx = findPlatformAt(target.x, target.y, platforms);
+            if (targetPlatIdx >= 0) {
+                const targetPlat = platforms[targetPlatIdx];
+                // Only climb if target platform is above bot
+                if (targetPlat.y < botPlayer.y - 20) {
+                    const moveDir = target.x > botPlayer.x ? 1 : -1;
+                    const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
+                    
+                    // Move toward platform side and jump
+                    botPlayer.inputs.right = moveDir > 0;
+                    botPlayer.inputs.left = moveDir < 0;
+                    botPlayer.inputs.jump = true;
+                    this.debugInfo += 'CLIMB_TARGET_PLAT ';
+                    // Skip normal behavior since we're climbing
+                    return;
+                }
+            }
+        }
+
         // --- Execute behavior based on state ---
         switch (this.state) {
             case 'PATROL':
@@ -970,6 +992,26 @@ class BotAI {
 
         // Target is significantly above us
         if (dy < -100) {
+            // Check if target is on a platform we can climb up to
+            const targetPlatIdx = findPlatformAt(targetX, targetY, platforms);
+            if (targetPlatIdx >= 0) {
+                const targetPlat = platforms[targetPlatIdx];
+                const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
+                const distToSide = Math.abs(climbTargetX - botPlayer.x);
+                
+                // Use buildMomentumAndJump to actually jump toward the platform side
+                // This makes the bot run and jump instead of just standing under it
+                if (distToSide < 600) {
+                    this.buildMomentumAndJump(botPlayer, platforms, currentTick, moveDir, true);
+                    this.debugInfo += 'JUMP_TO_CLIMB ';
+                    return;
+                }
+                
+                // Move toward the platform side to get in range
+                this.moveToward(botPlayer, climbTargetX, platforms);
+                this.debugInfo += 'MOVE_TO_CLIMB ';
+                return;
+            }
             if (atEdge) {
                 // At edge - look for platforms we can reach with a jump
                 const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, moveDir);
@@ -1882,7 +1924,10 @@ function spawnBot(players, platforms, worldWidth, worldHeight, botIndex) {
         botIndex: botIndex,
         jumpsRemaining: 1,
         prevJumpInput: false,
-        jumpPressed: false
+        jumpPressed: false,
+        isClimbing: false,
+        climbTimer: 0,
+        climbTargetY: 0
     };
 
     const personality = getBotPersonality(botIndex);

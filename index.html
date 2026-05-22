@@ -696,6 +696,13 @@ let showBotPaths = false;
                 anim.facingRight = true;
             }
             
+            // Check if player is climbing - show falling/airborne pose
+            if (playerState.isClimbing) {
+                anim.currentAnimation = 'falling';
+                anim.frameIndex = 0; // falling frame
+                return;
+            }
+            
             // Check if player is dead - show dead sprite when on ground, falling when in air
             if (playerState.isDead) {
                 if (playerState.onGround) {
