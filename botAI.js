@@ -625,7 +625,7 @@ class BotAI {
         }
 
         // --- Climbing check - higher priority than following player ---
-        // If target is on a platform above, climb that platform
+        // If target is on a platform above, check if we can reach it or need intermediate platforms
         if (target && !botPlayer.isClimbing) {
             const targetPlatIdx = findPlatformAt(target.x, target.y, platforms);
             if (targetPlatIdx >= 0) {
@@ -633,15 +633,34 @@ class BotAI {
                 // Only climb if target platform is above bot
                 if (targetPlat.y < botPlayer.y - 20) {
                     const moveDir = target.x > botPlayer.x ? 1 : -1;
-                    const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
                     
-                    // Move toward platform side and jump
-                    botPlayer.inputs.right = moveDir > 0;
-                    botPlayer.inputs.left = moveDir < 0;
-                    botPlayer.inputs.jump = true;
-                    this.debugInfo += 'CLIMB_TARGET_PLAT ';
-                    // Skip normal behavior since we're climbing
-                    return;
+                    // Check if target platform is reachable directly
+                    const reachablePlatforms = this.findReachablePlatforms(botPlayer, platforms, moveDir);
+                    const canReachTargetDirectly = reachablePlatforms.includes(targetPlat);
+                    
+                    if (canReachTargetDirectly) {
+                        // Can reach target directly - climb it
+                        const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
+                        botPlayer.inputs.right = moveDir > 0;
+                        botPlayer.inputs.left = moveDir < 0;
+                        botPlayer.inputs.jump = true;
+                        this.debugInfo += 'CLIMB_TARGET_DIRECT ';
+                        return;
+                    } else if (reachablePlatforms.length > 0) {
+                        // Target too high - climb to best intermediate platform
+                        const bestIntermediate = reachablePlatforms.reduce((best, p) => {
+                            const pDist = Math.abs(p.y - targetPlat.y) + Math.abs((p.x + p.w/2) - target.x);
+                            const bestDist = Math.abs(best.y - targetPlat.y) + Math.abs((best.x + best.w/2) - target.x);
+                            return pDist < bestDist ? p : best;
+                        });
+                        
+                        const climbTargetX = moveDir > 0 ? bestIntermediate.x - PLAYER_WIDTH : bestIntermediate.x + bestIntermediate.w;
+                        botPlayer.inputs.right = moveDir > 0;
+                        botPlayer.inputs.left = moveDir < 0;
+                        botPlayer.inputs.jump = true;
+                        this.debugInfo += 'CLIMB_INTERMEDIATE ';
+                        return;
+                    }
                 }
             }
         }
