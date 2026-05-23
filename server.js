@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const botAI = require('./botAI');
+const botAISpawnBot = botAI.spawnBot;
 
 // Server configuration
 const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
@@ -1254,7 +1255,21 @@ wss.on('connection', (ws) => {
          try {
              const data = JSON.parse(message);
              
-             if (data.type === 'debug') {
+              if (data.type === 'addBot') {
+                  const nextIndex = (() => {
+                      let max = 0;
+                      for (const [, { player }] of players) {
+                          if (player.isBot) max = Math.max(max, player.botIndex + 1);
+                      }
+                      return max;
+                  })();
+                  const newBot = botAISpawnBot(players, platforms, WORLD_WIDTH, WORLD_HEIGHT, nextIndex);
+                  players.set(newBot.id, { player: newBot, ws: null });
+                  console.log(`Spectator manually spawned bot #${nextIndex} (id=${newBot.id})`);
+                  return;
+              }
+
+              if (data.type === 'debug') {
                  if (data.debugBotPaths !== undefined) {
                      debugMode = data.debugBotPaths;
                      console.log('Debug mode:', debugMode ? 'ON' : 'OFF');

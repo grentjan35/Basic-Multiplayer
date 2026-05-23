@@ -1955,5 +1955,6 @@ module.exports = {
     getBotCount,
     getHumanPlayerCount,
     BOT_PERSONALITIES,
-    getBotPathsForDebug
+    getBotPathsForDebug,
+    spawnBot
 };

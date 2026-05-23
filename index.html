@@ -167,6 +167,30 @@
         #spectatorCloseBtn:hover {
             color: #b7e057;
         }
+
+        #spectatorAddBotBtn {
+            display: none;
+            width: 100%;
+            padding: 5px 0;
+            border: none;
+            border-top: 1px solid #3a3a3a;
+            background: #2a2a2a;
+            color: #b7e057;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            letter-spacing: 2px;
+        }
+
+        #spectatorAddBotBtn:hover {
+            background: #3a3a3a;
+        }
+
+        #spectatorAddBotBtn:active {
+            background: #b7e057;
+            color: #111;
+        }
     </style>
 </head>
 <body>
@@ -177,9 +201,10 @@
         <div id="spectatorPanel">
             <button id="spectatorCloseBtn">&times;</button>
             <div id="spectatorHeader">&gt; SPECTATOR</div>
-            <div id="spectatorHint">[WASD] move cam | [QE] zoom | [1-9] attach | [Click] attach | [ESC] exit</div>
+            <div id="spectatorHint">[WASD] move cam | [QE] zoom | [1-9] attach | [Click] attach | [ESC] exit | [B+] add bot</div>
             <div id="spectatorList"></div>
             <div id="spectatorFreeLabel">&gt; Free Camera</div>
+            <button id="spectatorAddBotBtn">+</button>
         </div>
         <canvas id="minimap"></canvas>
     </div>
@@ -2005,8 +2030,17 @@ let showBotPaths = false;
                  }
 
                 buildSpectatorEntityList();
-                document.getElementById('spectatorPanel').style.display = 'block';
+                 document.getElementById('spectatorPanel').style.display = 'block';
                 document.getElementById('spectatorCloseBtn').style.display = 'block';
+                document.getElementById('spectatorAddBotBtn').style.display = 'block';
+
+                // Add Bot button
+                const addBotBtn = document.getElementById('spectatorAddBotBtn');
+                addBotBtn.onclick = () => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'addBot' }));
+                    }
+                };
 
                 // Close button
                 document.getElementById('spectatorCloseBtn').onclick = (e) => {
@@ -2067,6 +2101,7 @@ let showBotPaths = false;
             }
 
             document.getElementById('spectatorPanel').style.display = 'none';
+            document.getElementById('spectatorAddBotBtn').style.display = 'none';
             if (window._spectatorScrollHandler) {
                 document.removeEventListener('wheel', window._spectatorScrollHandler, false);
                 delete window._spectatorScrollHandler;
