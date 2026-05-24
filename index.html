@@ -275,8 +275,8 @@
         const TICK_INTERVAL_MS = 33;       // known server tick gap (30 TPS)
 
         // ── Hard bounds ─────────────────────────────────────────────────────
-        const CLIENT_SMOOTH_MIN = 100;    // ms — never below this (3+ ticks buffer for buttery smooth)
-        const CLIENT_SMOOTH_MAX = 200;    // ms — never above this (handles any network jitter)
+        const CLIENT_SMOOTH_MIN = 20;     // ms — never below this (instant response)
+        const CLIENT_SMOOTH_MAX = 60;    // ms — never above this (minimal jitter handling)
 
         // ── EWMA rates ──────────────────────────────────────────────────────
         // Jitter signal: 8 %/frame — very slow, tracks only steady trends
