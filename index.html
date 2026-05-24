@@ -272,11 +272,11 @@
         const characterImages = {}; // Map of character name -> Image
         
         // Interpolation system — adaptive delay: jitter + queue-depth (localhost + cloud)
-        const TICK_INTERVAL_MS = 16.67;   // known server tick gap (60 TPS)
+        const TICK_INTERVAL_MS = 22.22;   // known server tick gap (45 TPS)
 
         // ── Hard bounds ─────────────────────────────────────────────────────
-        const CLIENT_SMOOTH_MIN = 20;     // ms — never below this (reduced for snappier feel)
-        const CLIENT_SMOOTH_MAX = 80;     // ms — never above this (reduced for less lag)
+        const CLIENT_SMOOTH_MIN = 40;     // ms — never below this (2-3 ticks buffer for smoothness)
+        const CLIENT_SMOOTH_MAX = 100;    // ms — never above this (handles network jitter)
 
         // ── EWMA rates ──────────────────────────────────────────────────────
         // Jitter signal: 8 %/frame — very slow, tracks only steady trends

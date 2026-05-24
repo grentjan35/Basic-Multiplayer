@@ -6,7 +6,7 @@ const botAI = require('./botAI');
 const botAISpawnBot = botAI.spawnBot;
 
 // Server configuration
-const TICK_RATE = 60; // Server updates per second (increased for faster mechanics)
+const TICK_RATE = 45; // Server updates per second (balanced speed + smoothness)
 const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
