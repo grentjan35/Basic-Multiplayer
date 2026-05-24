@@ -72,15 +72,13 @@
             position: absolute;
             bottom: 10px;
             left: 10px;
-            width: 260px;
-            max-height: 320px;
+            min-width: 260px;
             background-color: rgba(14, 14, 14, 0.93);
             border: 1px solid #3a3a3a;
             font-family: 'Courier New', monospace;
             font-size: 11px;
             color: #9a9a9a;
             z-index: 20;
-            overflow: hidden;
             user-select: none;
         }
 
@@ -183,14 +181,39 @@
             letter-spacing: 2px;
         }
 
-        #spectatorAddBotBtn:hover {
-            background: #3a3a3a;
+        #spectatorAddBotBtn:active {
+            background-color: #0a5e0a;
         }
 
-        #spectatorAddBotBtn:active {
-            background: #b7e057;
-            color: #111;
+        /* ── Bot Delete Button (red × shown on selected bot) ─────── */
+        .spectatorDeleteBtn {
+            display: none;
+            margin-left: auto;
+            width: 18px;
+            height: 18px;
+            min-width: 18px;
+            border: none;
+            border-radius: 50%;
+            background-color: #c0392b;
+            color: #fff;
+            font-size: 11px;
+            font-weight: bold;
+            line-height: 18px;
+            text-align: center;
+            cursor: pointer;
+            padding: 0;
+            font-family: 'Courier New', monospace;
+            user-select: none;
         }
+
+        .spectatorDeleteBtn:hover {
+            background-color: #e74c3c;
+        }
+
+        .spectatorEntry.hasDelete .spectatorDeleteBtn {
+            display: block;
+        }
+
     </style>
 </head>
 <body>
@@ -201,7 +224,7 @@
         <div id="spectatorPanel">
             <button id="spectatorCloseBtn">&times;</button>
             <div id="spectatorHeader">&gt; SPECTATOR</div>
-            <div id="spectatorHint">[WASD] move cam | [QE] zoom | [1-9] attach | [Click] attach | [ESC] exit | [B+] add bot</div>
+            <div id="spectatorHint">[Click] select | [Click ×] remove bot | [ESC] exit | [B+] add bot</div>
             <div id="spectatorList"></div>
             <div id="spectatorFreeLabel">&gt; Free Camera</div>
             <button id="spectatorAddBotBtn">+</button>
@@ -249,11 +272,11 @@
         const characterImages = {}; // Map of character name -> Image
         
         // Interpolation system — adaptive delay: jitter + queue-depth (localhost + cloud)
-        const TICK_INTERVAL_MS = 33;      // known server tick gap (30 TPS)
+        const TICK_INTERVAL_MS = 16.67;   // known server tick gap (60 TPS)
 
         // ── Hard bounds ─────────────────────────────────────────────────────
-        const CLIENT_SMOOTH_MIN = 50;     // ms — never below this
-        const CLIENT_SMOOTH_MAX = 150;    // ms — never above this
+        const CLIENT_SMOOTH_MIN = 20;     // ms — never below this (reduced for snappier feel)
+        const CLIENT_SMOOTH_MAX = 80;     // ms — never above this (reduced for less lag)
 
         // ── EWMA rates ──────────────────────────────────────────────────────
         // Jitter signal: 8 %/frame — very slow, tracks only steady trends
@@ -289,6 +312,7 @@
         // Spectator mode state
         let spectatorActive = false;
         let spectatorTargetId = null;  // null = free camera, number = tracking that entity
+        let spectatorSelectedForDelete = null;  // null or botId — shows red delete button on that entry
         const SPECTATOR_CAMERA_ZOOM = 1.0;
         let spectatorCamera = { x: 0, y: 0 }; // World-space free-camera position when no target is set
         let spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM; // Current zoom in spectator
@@ -2019,6 +2043,7 @@ let showBotPaths = false;
                 }
                 spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM;
                 spectatorTargetId = null;
+                spectatorSelectedForDelete = null;
 
                  // Zero out all local movement inputs so the server never sees them
                  inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
@@ -2059,17 +2084,6 @@ let showBotPaths = false;
                 };
                 document.addEventListener('wheel', scrollHandler, { passive: false });
 
-                // Click-to-attach via panel items
-                const listEl = document.getElementById('spectatorList');
-                listEl.onclick = (e) => {
-                    const entry = e.target.closest('[data-entity-id]');
-                    if (entry) {
-                        const id = parseInt(entry.dataset.entityId, 10);
-                        spectatorTargetId = (spectatorTargetId === id) ? null : id;
-                        buildSpectatorEntityList();
-                    }
-                };
-
                 // Click "Free Camera" row
                 const freeLabel = document.getElementById('spectatorFreeLabel');
                 freeLabel.onclick = () => {
@@ -2090,6 +2104,7 @@ let showBotPaths = false;
             if (!spectatorActive) return;
             spectatorActive = false;
             spectatorTargetId = null;
+            spectatorSelectedForDelete = null;
 
             // Restore clean inputs
             inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
@@ -2107,6 +2122,34 @@ let showBotPaths = false;
                 delete window._spectatorScrollHandler;
             }
             console.log('[Spectator] Deactivated');
+        }
+
+        /**
+         * Inline onclick handler injected into each spectator entry div.
+         * Handles both entry selection and the embedded delete button in one place.
+         */
+        function handleSpectatorEntryClick(event, id, isBot) {
+            // Delete-btn click — consume the event here so it doesn't propagate
+            const delBtn = event.target.closest('.spectatorDeleteBtn');
+            if (delBtn) {
+                event.stopPropagation();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'removeBot', botId: id }));
+                }
+                spectatorSelectedForDelete = null;
+                buildSpectatorEntityList();
+                return;
+            }
+
+            // Entry click — select/deselect spectator target
+            if (spectatorTargetId === id) {
+                spectatorTargetId = null;
+                spectatorSelectedForDelete = null;
+            } else {
+                spectatorTargetId = id;
+                spectatorSelectedForDelete = isBot ? id : null;
+            }
+            buildSpectatorEntityList();
         }
 
         /** Rebuild the entity list from the current playerStates snapshot. */
@@ -2135,12 +2178,18 @@ let showBotPaths = false;
 
             let html = '';
             for (let i = 0; i < entries.length; i++) {
-                const ent     = entries[i];
-                const tag     = ent.isBot ? '[BOT]' : '[P]';
-                const selClass = spectatorTargetId === ent.id ? 'selected' : '';
-                html += `<div class="spectatorEntry ${selClass}" data-entity-id="${ent.id}">
+                const ent          = entries[i];
+                const tag          = ent.isBot ? '[BOT]' : '[P]';
+                const selClass     = spectatorTargetId === ent.id ? 'selected' : '';
+                const hasDelClass  = (spectatorSelectedForDelete === ent.id) ? 'hasDelete' : '';
+                const deleteBtn    = ent.isBot
+                    ? `<button class="spectatorDeleteBtn" data-delete-bot-id="${ent.id}" title="Remove bot">&times;</button>`
+                    : '';
+                html += `<div class="spectatorEntry ${selClass} ${hasDelClass}" data-entity-id="${ent.id}"
+                      onclick="handleSpectatorEntryClick(event, ${ent.id}, ${ent.isBot})">
                     <span class="colourSwatch" style="background-color:${ent.color}"></span>
                     <span>${tag} ${ent.label}</span>
+                    ${deleteBtn}
                 </div>`;
             }
 

@@ -6,7 +6,7 @@ const botAI = require('./botAI');
 const botAISpawnBot = botAI.spawnBot;
 
 // Server configuration
-const TICK_RATE = 30; // Server updates per second (reduced for cloud performance)
+const TICK_RATE = 60; // Server updates per second (increased for faster mechanics)
 const TICK_INTERVAL = 1000 / TICK_RATE;
 
 // Physics constants - SERVER ONLY
@@ -1266,6 +1266,18 @@ wss.on('connection', (ws) => {
                   const newBot = botAISpawnBot(players, platforms, WORLD_WIDTH, WORLD_HEIGHT, nextIndex);
                   players.set(newBot.id, { player: newBot, ws: null });
                   console.log(`Spectator manually spawned bot #${nextIndex} (id=${newBot.id})`);
+                  return;
+              }
+
+              if (data.type === 'removeBot') {
+                  const botId = data.botId;
+                  if (players.has(botId)) {
+                      if (global.botAIs && global.botAIs.has(botId)) {
+                          global.botAIs.delete(botId);
+                      }
+                      players.delete(botId);
+                      console.log(`Spectator removed bot id=${botId}`);
+                  }
                   return;
               }
 
