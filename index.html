@@ -72,93 +72,34 @@
             position: absolute;
             bottom: 10px;
             left: 10px;
-            min-width: 260px;
-            background-color: rgba(14, 14, 14, 0.93);
+            width: 280px;
+            background-color: rgba(14, 14, 14, 0.95);
             border: 1px solid #3a3a3a;
             font-family: 'Courier New', monospace;
-            font-size: 11px;
+            font-size: 12px;
             color: #9a9a9a;
-            z-index: 20;
-            user-select: none;
+            z-index: 1000;
         }
 
         #spectatorHeader {
-            padding: 5px 8px;
+            padding: 8px 12px;
             background-color: #2a2a2a;
             border-bottom: 1px solid #3a3a3a;
             color: #b7e057;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: bold;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }
-
-        #spectatorHint {
-            padding: 3px 8px;
-            font-size: 9px;
-            color: #555;
-            border-bottom: 1px solid #2a2a2a;
-        }
-
-        #spectatorList {
-            overflow-y: auto;
-            max-height: 240px;
-        }
-
-        #spectatorList::-webkit-scrollbar {
-            width: 5px;
-        }
-
-        #spectatorList::-webkit-scrollbar-thumb {
-            background-color: #3a3a3a;
-        }
-
-        .spectatorEntry {
-            padding: 3px 8px;
-            cursor: pointer;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 6px;
-        }
-
-        .spectatorEntry:hover,
-        .spectatorEntry.selected {
-            background-color: #2a3a1a;
-            color: #b7e057;
-        }
-
-        .spectatorEntry .colourSwatch {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-
-        #spectatorFreeLabel {
-            padding: 3px 8px;
-            cursor: pointer;
-            color: #555;
-        }
-
-        #spectatorFreeLabel:hover {
-            background-color: #2a2a2a;
-            color: #9a9a9a;
         }
 
         #spectatorCloseBtn {
-            display: none;
-            position: absolute;
-            top: 0;
-            right: 0;
             background: none;
             border: none;
             color: #555;
-            font-size: 12px;
+            font-size: 16px;
             cursor: pointer;
-            padding: 4px 6px;
+            padding: 0 4px;
             font-family: 'Courier New', monospace;
         }
 
@@ -166,52 +107,91 @@
             color: #b7e057;
         }
 
-        #spectatorAddBotBtn {
-            display: none;
-            width: 100%;
-            padding: 5px 0;
-            border: none;
-            border-top: 1px solid #3a3a3a;
-            background: #2a2a2a;
+        #spectatorList {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        #spectatorList::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #spectatorList::-webkit-scrollbar-thumb {
+            background-color: #3a3a3a;
+            border-radius: 3px;
+        }
+
+        .spectatorEntry {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #2a2a2a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .spectatorEntry:hover {
+            background-color: #2a2a2a;
+        }
+
+        .spectatorEntry.selected {
+            background-color: #2a3a1a;
             color: #b7e057;
-            font-family: 'Courier New', monospace;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            letter-spacing: 2px;
         }
 
-        #spectatorAddBotBtn:active {
-            background-color: #0a5e0a;
+        .spectatorEntryInfo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        /* ── Bot Delete Button (red × shown on selected bot) ─────── */
-        .spectatorDeleteBtn {
-            display: none;
-            margin-left: auto;
-            width: 18px;
-            height: 18px;
-            min-width: 18px;
-            border: none;
+        .spectatorEntry .colourSwatch {
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
+        }
+
+        .spectatorDeleteBtn {
             background-color: #c0392b;
-            color: #fff;
-            font-size: 11px;
-            font-weight: bold;
-            line-height: 18px;
-            text-align: center;
+            color: white;
+            border: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
             cursor: pointer;
-            padding: 0;
-            font-family: 'Courier New', monospace;
-            user-select: none;
+            font-size: 12px;
+            font-weight: bold;
+            display: none;
         }
 
         .spectatorDeleteBtn:hover {
             background-color: #e74c3c;
         }
 
-        .spectatorEntry.hasDelete .spectatorDeleteBtn {
+        .spectatorEntry.selected .spectatorDeleteBtn {
             display: block;
+        }
+
+        #spectatorFooter {
+            padding: 8px 12px;
+            border-top: 1px solid #3a3a3a;
+            display: flex;
+            gap: 8px;
+        }
+
+        #spectatorAddBotBtn {
+            flex: 1;
+            padding: 6px;
+            background-color: #2a2a2a;
+            color: #b7e057;
+            border: 1px solid #3a3a3a;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        #spectatorAddBotBtn:hover {
+            background-color: #3a3a3a;
         }
 
     </style>
@@ -222,12 +202,14 @@
         <div id="playerCount">Players: 0</div>
         <div id="fpsCounter">FPS: 0</div>
         <div id="spectatorPanel">
-            <button id="spectatorCloseBtn">&times;</button>
-            <div id="spectatorHeader">&gt; SPECTATOR</div>
-            <div id="spectatorHint">[Click] select | [Click ×] remove bot | [ESC] exit | [B+] add bot</div>
+            <div id="spectatorHeader">
+                <span>&gt; SPECTATOR</span>
+                <button id="spectatorCloseBtn">&times;</button>
+            </div>
             <div id="spectatorList"></div>
-            <div id="spectatorFreeLabel">&gt; Free Camera</div>
-            <button id="spectatorAddBotBtn">+</button>
+            <div id="spectatorFooter">
+                <button id="spectatorAddBotBtn">+ Add Bot</button>
+            </div>
         </div>
         <canvas id="minimap"></canvas>
     </div>
@@ -312,10 +294,10 @@
         // Spectator mode state
         let spectatorActive = false;
         let spectatorTargetId = null;  // null = free camera, number = tracking that entity
-        let spectatorSelectedForDelete = null;  // null or botId — shows red delete button on that entry
         const SPECTATOR_CAMERA_ZOOM = 1.0;
         let spectatorCamera = { x: 0, y: 0 }; // World-space free-camera position when no target is set
         let spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM; // Current zoom in spectator
+        let lastSpectatorEntriesHash = ''; // Track if entries changed to avoid rebuilding every frame
 
         // Plus-key combo detection
         let plusPressCount = 0;
@@ -1294,13 +1276,6 @@ let showBotPaths = false;
                 if (e.code === 'KeyD' || e.code === 'ArrowRight') { e.preventDefault(); spectatorCamera.x += 12; }
                 if (e.code === 'KeyQ') { e.preventDefault(); spectatorCameraZoom = Math.max(0.25, spectatorCameraZoom - 0.05); }
                 if (e.code === 'KeyE') { e.preventDefault(); spectatorCameraZoom = Math.min(4.0, spectatorCameraZoom + 0.05); }
-
-                // Number keys 1–9: select entity from the panel list
-                const num = parseInt(e.key);
-                if (!isNaN(num) && num >= 1 && num <= 9) {
-                    e.preventDefault();
-                    selectSpectatorTargetByIndex(num - 1);
-                }
                 return;
             }
 
@@ -2043,7 +2018,7 @@ let showBotPaths = false;
                 }
                 spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM;
                 spectatorTargetId = null;
-                spectatorSelectedForDelete = null;
+                lastSpectatorEntriesHash = ''; // Force rebuild on activation
 
                  // Zero out all local movement inputs so the server never sees them
                  inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
@@ -2055,9 +2030,7 @@ let showBotPaths = false;
                  }
 
                 buildSpectatorEntityList();
-                 document.getElementById('spectatorPanel').style.display = 'block';
-                document.getElementById('spectatorCloseBtn').style.display = 'block';
-                document.getElementById('spectatorAddBotBtn').style.display = 'block';
+                document.getElementById('spectatorPanel').style.display = 'block';
 
                 // Add Bot button
                 const addBotBtn = document.getElementById('spectatorAddBotBtn');
@@ -2076,20 +2049,11 @@ let showBotPaths = false;
                 // Mouse wheel zoom in / out
                 const scrollHandler = (e) => {
                     if (!spectatorActive) return;
-                    // Allow scroll only when pointer is over the panel (or anywhere)
-                    // Using PageY to always respond so scroll zones outside viewport still zoom
                     spectatorCameraZoom = Math.max(0.25, Math.min(4.0,
                         spectatorCameraZoom - (e.deltaY > 0 ? 0.05 : -0.05)));
                     e.preventDefault();
                 };
                 document.addEventListener('wheel', scrollHandler, { passive: false });
-
-                // Click "Free Camera" row
-                const freeLabel = document.getElementById('spectatorFreeLabel');
-                freeLabel.onclick = () => {
-                    spectatorTargetId = null;
-                    buildSpectatorEntityList();
-                };
 
                 // Leave reference so exitSpectator can clean them up
                 window._spectatorScrollHandler = scrollHandler;
@@ -2104,7 +2068,6 @@ let showBotPaths = false;
             if (!spectatorActive) return;
             spectatorActive = false;
             spectatorTargetId = null;
-            spectatorSelectedForDelete = null;
 
             // Restore clean inputs
             inputs.left = inputs.right = inputs.jump = inputs.attack = inputs.down = false;
@@ -2116,40 +2079,11 @@ let showBotPaths = false;
             }
 
             document.getElementById('spectatorPanel').style.display = 'none';
-            document.getElementById('spectatorAddBotBtn').style.display = 'none';
             if (window._spectatorScrollHandler) {
                 document.removeEventListener('wheel', window._spectatorScrollHandler, false);
                 delete window._spectatorScrollHandler;
             }
             console.log('[Spectator] Deactivated');
-        }
-
-        /**
-         * Inline onclick handler injected into each spectator entry div.
-         * Handles both entry selection and the embedded delete button in one place.
-         */
-        function handleSpectatorEntryClick(event, id, isBot) {
-            // Delete-btn click — consume the event here so it doesn't propagate
-            const delBtn = event.target.closest('.spectatorDeleteBtn');
-            if (delBtn) {
-                event.stopPropagation();
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'removeBot', botId: id }));
-                }
-                spectatorSelectedForDelete = null;
-                buildSpectatorEntityList();
-                return;
-            }
-
-            // Entry click — select/deselect spectator target
-            if (spectatorTargetId === id) {
-                spectatorTargetId = null;
-                spectatorSelectedForDelete = null;
-            } else {
-                spectatorTargetId = id;
-                spectatorSelectedForDelete = isBot ? id : null;
-            }
-            buildSpectatorEntityList();
         }
 
         /** Rebuild the entity list from the current playerStates snapshot. */
@@ -2158,7 +2092,6 @@ let showBotPaths = false;
             if (!listEl) return;
 
             // Collect and sort: bots (isBot flag) first, then humans; each group alphabetical
-            const now = Date.now();
             const entries = [];
             for (const [id, states] of playerStates) {
                 if (!states || !states.length) continue;
@@ -2176,45 +2109,84 @@ let showBotPaths = false;
                 return a.label.localeCompare(b.label);
             });
 
+            // Calculate hash to check if entries changed
+            const currentHash = JSON.stringify(entries.map(e => ({ id: e.id, label: e.label })));
+            if (currentHash === lastSpectatorEntriesHash) {
+                // Only update selection class if target changed but entries didn't
+                const entryElements = listEl.querySelectorAll('.spectatorEntry');
+                entryElements.forEach(entry => {
+                    const id = parseInt(entry.dataset.id);
+                    if (id === spectatorTargetId) {
+                        entry.classList.add('selected');
+                    } else {
+                        entry.classList.remove('selected');
+                    }
+                });
+                return;
+            }
+
+            lastSpectatorEntriesHash = currentHash;
+
             let html = '';
-            for (let i = 0; i < entries.length; i++) {
-                const ent          = entries[i];
-                const tag          = ent.isBot ? '[BOT]' : '[P]';
-                const selClass     = spectatorTargetId === ent.id ? 'selected' : '';
-                const hasDelClass  = (spectatorSelectedForDelete === ent.id) ? 'hasDelete' : '';
-                const deleteBtn    = ent.isBot
-                    ? `<button class="spectatorDeleteBtn" data-delete-bot-id="${ent.id}" title="Remove bot">&times;</button>`
+            for (const ent of entries) {
+                const tag = ent.isBot ? '[BOT]' : '[P]';
+                const selClass = spectatorTargetId === ent.id ? 'selected' : '';
+                const deleteBtn = ent.isBot
+                    ? `<button class="spectatorDeleteBtn" onclick="event.stopPropagation(); deleteSpectatorBot(${ent.id});">&times;</button>`
                     : '';
-                html += `<div class="spectatorEntry ${selClass} ${hasDelClass}" data-entity-id="${ent.id}"
-                      onclick="handleSpectatorEntryClick(event, ${ent.id}, ${ent.isBot})">
-                    <span class="colourSwatch" style="background-color:${ent.color}"></span>
-                    <span>${tag} ${ent.label}</span>
+                html += `<div class="spectatorEntry ${selClass}" data-id="${ent.id}" data-is-bot="${ent.isBot}">
+                    <div class="spectatorEntryInfo">
+                        <span class="colourSwatch" style="background-color:${ent.color}"></span>
+                        <span>${tag} ${ent.label}</span>
+                    </div>
                     ${deleteBtn}
                 </div>`;
             }
 
             listEl.innerHTML = html;
-            updateSpectatorFreeLabel();
+
+            // Add event listeners immediately after setting innerHTML
+            const entryElements = listEl.querySelectorAll('.spectatorEntry');
+            entryElements.forEach(entry => {
+                const id = parseInt(entry.dataset.id);
+                const isBot = entry.dataset.isBot === 'true';
+                if (!id) return;
+
+                entry.onclick = (e) => {
+                    if (e.target.classList.contains('spectatorDeleteBtn')) {
+                        e.stopPropagation();
+                        deleteSpectatorBot(id);
+                        return;
+                    }
+                    selectSpectatorTarget(id);
+                };
+
+                entry.oncontextmenu = (e) => {
+                    if (isBot) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        deleteSpectatorBot(id);
+                    }
+                };
+            });
         }
 
-        function updateSpectatorFreeLabel() {
-            const el = document.getElementById('spectatorFreeLabel');
-            if (!el) return;
-            const sel = spectatorTargetId === null ? 'color:#b7e057;' : 'color:#555;';
-            el.innerHTML = spectatorTargetId === null
-                ? '&gt; Free Camera'
-                : '&gt; Free Camera';
-            el.setAttribute('style', sel);
+        function selectSpectatorTarget(id) {
+            if (spectatorTargetId === id) {
+                spectatorTargetId = null;
+            } else {
+                spectatorTargetId = id;
+            }
+            buildSpectatorEntityList();
         }
 
-        function selectSpectatorTargetByIndex(index) {
-            const listEl = document.getElementById('spectatorList');
-            if (!listEl) return;
-            const allEntries = listEl.querySelectorAll('.spectatorEntry');
-            if (index < 0 || index >= allEntries.length) return;
-
-            const id = parseInt(allEntries[index].dataset.entityId, 10);
-            spectatorTargetId = (spectatorTargetId === id) ? null : id;
+        function deleteSpectatorBot(botId) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'removeBot', botId: botId }));
+            }
+            if (spectatorTargetId === botId) {
+                spectatorTargetId = null;
+            }
             buildSpectatorEntityList();
         }
 
