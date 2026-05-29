@@ -52,6 +52,16 @@ const WORLD_HEIGHT = 4000;
 // Available character spritesheets
 const CHARACTERS = ['Bookie', 'Getaway Driver', 'Informant', 'Safecracker', 'smuggler', 'Street Thug', 'Boss', 'Distractor Duck', 'Dark Cowboy', 'Racketeer', 'Purple', 'Guard', 'Dock Overseer', 'Hostage', 'Doorman'];
 
+// Random readable name generator for bots
+const BOT_FIRST_NAMES = ['Ace', 'Bolt', 'Crash', 'Duke', 'Echo', 'Flint', 'Ghost', 'Hawk', 'Ivy', 'Jax', 'Kilo', 'Luna', 'Max', 'Neo', 'Omen', 'Phoenix', 'Quinn', 'Razor', 'Shadow', 'Titan', 'Viper', 'Wolf', 'Xena', 'Yuri', 'Zane'];
+const BOT_LAST_NAMES = ['Blade', 'Chaos', 'Drift', 'Edge', 'Fury', 'Grim', 'Haze', 'Iron', 'Jolt', 'Knock', 'Light', 'Mist', 'Nova', 'Pulse', 'Quake', 'Rage', 'Storm', 'Thunder', 'Volt', 'Wave'];
+
+function generateRandomBotName() {
+    const first = BOT_FIRST_NAMES[Math.floor(Math.random() * BOT_FIRST_NAMES.length)];
+    const last = BOT_LAST_NAMES[Math.floor(Math.random() * BOT_LAST_NAMES.length)];
+    return `${first} ${last}`;
+}
+
 // Per-tick audio events queue (cleared each frame in gameLoop)
 const audioEvents = [];
 
@@ -388,7 +398,7 @@ const wss = new WebSocket.Server({ server });
 
 // Player class - SERVER ONLY
 class Player {
-    constructor(id, x, y) {
+    constructor(id, x, y, name = null) {
         this.id = id;
         this.x = x;
         this.y = y;
@@ -397,6 +407,7 @@ class Player {
         this.onGround = false;
         this.color = this.generateDarkColor();
         this.sprite = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
+        this.name = name || (id < 0 ? generateRandomBotName() : `Player ${id}`);
         this.inputs = { left: false, right: false, jump: false, attack: false, down: false };
         // Single jump system
         this.jumpsRemaining = 1; // Allow single jump
@@ -1197,6 +1208,7 @@ function gameLoop() {
                 onGround: player.onGround,
                 color: player.color,
                 sprite: player.sprite,
+                name: player.name,
                 gotHit: player.hitStunTimer > 0, // Multi-frame hit indication
                 health: player.health,
                 maxHealth: MAX_HEALTH,
@@ -1289,6 +1301,14 @@ wss.on('connection', (ws) => {
                  return;
              }
              
+             if (data.type === 'setName') {
+                 const playerData = players.get(playerId);
+                 if (playerData && data.name) {
+                     playerData.player.name = data.name;
+                     console.log(`Player ${playerId} set name to: ${data.name}`);
+                 }
+             }
+
              if (data.type === 'input') {
                  const playerData = players.get(playerId);
                  if (playerData) {

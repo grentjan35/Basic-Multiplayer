@@ -21,6 +21,16 @@ const GROUND_EDGE_Y = WORLD_HEIGHT - 350;  // y-coord below which any platform c
     const HITBOX_LEFT_INSET = 14;
     const HITBOX_WIDTH = PLAYER_WIDTH - HITBOX_LEFT_INSET;
 
+// Random readable name generator for bots
+const BOT_FIRST_NAMES = ['Ace', 'Bolt', 'Crash', 'Duke', 'Echo', 'Flint', 'Ghost', 'Hawk', 'Ivy', 'Jax', 'Kilo', 'Luna', 'Max', 'Neo', 'Omen', 'Phoenix', 'Quinn', 'Razor', 'Shadow', 'Titan', 'Viper', 'Wolf', 'Xena', 'Yuri', 'Zane'];
+const BOT_LAST_NAMES = ['Blade', 'Chaos', 'Drift', 'Edge', 'Fury', 'Grim', 'Haze', 'Iron', 'Jolt', 'Knock', 'Light', 'Mist', 'Nova', 'Pulse', 'Quake', 'Rage', 'Storm', 'Thunder', 'Volt', 'Wave'];
+
+function generateRandomBotName() {
+    const first = BOT_FIRST_NAMES[Math.floor(Math.random() * BOT_FIRST_NAMES.length)];
+    const last = BOT_LAST_NAMES[Math.floor(Math.random() * BOT_LAST_NAMES.length)];
+    return `${first} ${last}`;
+}
+
 // ============================================================
 // SMART JUMP-NODE A* PATHFINDING (replaces old platform graph / navmesh)
 // ============================================================
@@ -1826,6 +1836,7 @@ function spawnBot(players, platforms, worldWidth, worldHeight, botIndex) {
         facingRight: true,
         color: color,
         sprite: character,
+        name: generateRandomBotName(),
         inputs: { left: false, right: false, jump: false, attack: false, down: false },
         attackProcessed: false,
         gotHit: false,

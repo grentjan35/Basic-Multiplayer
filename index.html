@@ -194,9 +194,83 @@
             background-color: #3a3a3a;
         }
 
+        #nameEntryModal {
+            display: flex;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #nameEntryContent {
+            background-color: #1a1a1a;
+            border: 2px solid #3a3a3a;
+            padding: 40px;
+            border-radius: 8px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        #nameEntryTitle {
+            color: #b7e057;
+            font-size: 24px;
+            margin-bottom: 20px;
+            font-family: 'Courier New', monospace;
+        }
+
+        #nameEntryInput {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background-color: #0d0d0d;
+            border: 1px solid #3a3a3a;
+            color: #888;
+            font-family: 'Courier New', monospace;
+            margin-bottom: 20px;
+            box-sizing: border-box;
+            outline: none;
+        }
+
+        #nameEntryInput:focus {
+            border-color: #b7e057;
+        }
+
+        #nameEntryButton {
+            padding: 12px 30px;
+            font-size: 16px;
+            background-color: #2a2a2a;
+            color: #b7e057;
+            border: 1px solid #3a3a3a;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            transition: background-color 0.2s;
+        }
+
+        #nameEntryButton:hover {
+            background-color: #3a3a3a;
+        }
+
+        #nameEntryButton:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
     </style>
 </head>
 <body>
+    <div id="nameEntryModal">
+        <div id="nameEntryContent">
+            <div id="nameEntryTitle">&gt; ENTER YOUR NAME</div>
+            <input type="text" id="nameEntryInput" placeholder="Your name..." maxlength="20" autocomplete="off">
+            <button id="nameEntryButton">JOIN GAME</button>
+        </div>
+    </div>
     <div id="container">
         <canvas id="canvas"></canvas>
         <div id="playerCount">Players: 0</div>
@@ -225,6 +299,7 @@
         
         let ws = null;
         let myPlayerId = null;
+        let playerName = null;
         let platforms = [];
         let players = [];
         let worldWidth = 0;
@@ -914,6 +989,7 @@ let showBotPaths = false;
                 onGround: state2.onGround,
                 color: state1.color,
                 sprite: state1.sprite,
+                name: state1.name,
                 health: state1.health,
                 maxHealth: state1.maxHealth,
                 comboStage: state1.comboStage,
@@ -1043,7 +1119,7 @@ let showBotPaths = false;
         }
 
         // Connect to server
-        function connect() {
+        function connect(playerName) {
             // Always use the current host for WebSocket connection
             // This works for both localhost and Hugging Face
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1070,6 +1146,10 @@ let showBotPaths = false;
             ws.onopen = () => {
                 console.log('WebSocket connected successfully');
                 playerCount.textContent = 'Connected to server';
+                // Send player name to server
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'setName', name: playerName }));
+                }
             };
             
             ws.onmessage = async (event) => {
@@ -1123,6 +1203,7 @@ let showBotPaths = false;
                             onGround: player.onGround,
                             color: player.color,
                             sprite: player.sprite,
+                            name: player.name,
                             gotHit: gotHit,
                             health: player.health,
                             maxHealth: player.maxHealth,
@@ -1416,6 +1497,31 @@ let showBotPaths = false;
             ctx.restore();
         }
 
+        // Draw player name above the player
+        function drawPlayerName(player) {
+            if (!player.name) return;
+            
+            const name = player.name;
+            ctx.save();
+            
+            // Apply opacity for fade in/out
+            const opacity = player.opacity !== undefined ? player.opacity : 1.0;
+            ctx.globalAlpha = opacity;
+            
+            // Font settings - same as health bar
+            ctx.font = '8px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            
+            // Draw name text above the health bar (health bar is at y - 12, health text at y - 14)
+            // Position name at y - 28 to be clearly above the health bar
+            // Offset to the right by adding 8 pixels to center it properly
+            ctx.fillStyle = '#b7e057';
+            ctx.fillText(name, player.x + PLAYER_WIDTH / 2 + 8, player.y - 28);
+            
+            ctx.restore();
+        }
+
         // Draw a single player with their character spritesheet
         function drawPlayer(player) {
             // Update animation for all players using server state
@@ -1441,6 +1547,9 @@ let showBotPaths = false;
             
             // Draw health bar above player
             drawHealthBar(player);
+            
+            // Draw player name above the player
+            drawPlayerName(player);
             
             // Get the character's spritesheet image
             const spriteName = player.sprite || Object.keys(characterImages)[0];
@@ -1748,8 +1857,31 @@ let showBotPaths = false;
             console.log('Window fully loaded');
         });
 
-        // Initialize
-        connect();
+        // Name entry handling
+        const nameEntryModal = document.getElementById('nameEntryModal');
+        const nameEntryInput = document.getElementById('nameEntryInput');
+        const nameEntryButton = document.getElementById('nameEntryButton');
+
+        // Handle name submission
+        function handleNameSubmit() {
+            const name = nameEntryInput.value.trim();
+            if (name.length > 0) {
+                playerName = name;
+                nameEntryModal.style.display = 'none';
+                connect(playerName);
+            }
+        }
+
+        // Event listeners for name entry
+        nameEntryButton.addEventListener('click', handleNameSubmit);
+        nameEntryInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleNameSubmit();
+            }
+        });
+
+        // Focus input on load
+        nameEntryInput.focus();
 
         // =============================================================
         // SFX AUDIO SYSTEM — WebAudio with 3D distance rolloff
