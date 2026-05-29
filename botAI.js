@@ -1925,21 +1925,22 @@ function updateBotAI(players, platforms, worldWidth, worldHeight, currentTick) {
     const humanCount = getHumanPlayerCount(players);
     const currentBotCount = getBotCount(players);
 
-    if (humanCount === 0 && currentBotCount < 4) {
-        for (let i = currentBotCount; i < 4; i++) {
-            const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
-            const ws = null;
-            players.set(botPlayer.id, { player: botPlayer, ws });
-        }
-        console.log(`Spawned ${4 - currentBotCount} bots (no human players)`);
-    } else if (humanCount > 0 && currentBotCount < 4) {
-        for (let i = currentBotCount; i < 4; i++) {
-            const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
-            const ws = null;
-            players.set(botPlayer.id, { player: botPlayer, ws });
-        }
-        console.log(`Spawned ${4 - currentBotCount} bots alongside human players`);
-    }
+    // Disabled automatic bot spawning - bots can now be manually added/removed via spectator panel
+    // if (humanCount === 0 && currentBotCount < 4) {
+    //     for (let i = currentBotCount; i < 4; i++) {
+    //         const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
+    //         const ws = null;
+    //         players.set(botPlayer.id, { player: botPlayer, ws });
+    //     }
+    //     console.log(`Spawned ${4 - currentBotCount} bots (no human players)`);
+    // } else if (humanCount > 0 && currentBotCount < 4) {
+    //     for (let i = currentBotCount; i < 4; i++) {
+    //         const botPlayer = spawnBot(players, platforms, worldWidth, worldHeight, i + currentBotCount);
+    //         const ws = null;
+    //         players.set(botPlayer.id, { player: botPlayer, ws });
+    //     }
+    //     console.log(`Spawned ${4 - currentBotCount} bots alongside human players`);
+    // }
 
     for (const [id, { player }] of players) {
         if (!player.isBot) continue;
