@@ -567,19 +567,44 @@ function applyPhysics(player) {
     // Handle climbing mechanic
     if (player.isClimbing) {
         player.climbTimer--;
-        
+
         // Interpolate Y position towards target
         const climbSpeed = (player.climbTargetY - player.y) / player.climbTimer;
         player.y += climbSpeed;
-        
+
         // Stop climbing when timer ends
         if (player.climbTimer <= 0) {
             player.isClimbing = false;
             player.y = player.climbTargetY;
             player.onGround = true;
             player.vy = 0;
+
+            // Position player on top of the platform (move horizontally onto platform surface)
+            // Find which platform the player just climbed
+            for (const plat of platforms) {
+                const platTop = plat.y;
+                const platLeft = plat.x;
+                const platRight = plat.x + plat.w;
+
+                // Check if player is at the top of this platform
+                if (Math.abs(player.y + PLAYER_HEIGHT - platTop) < 5) {
+                    // Check if player is near the left or right edge
+                    const hitboxLeft = player.x + HITBOX_LEFT_INSET;
+                    const hitboxRight = hitboxLeft + HITBOX_WIDTH;
+
+                    // If near left edge, move onto platform
+                    if (Math.abs(hitboxRight - platLeft) < PLAYER_WIDTH) {
+                        player.x = platLeft + 10; // Move onto platform surface
+                    }
+                    // If near right edge, move onto platform
+                    else if (Math.abs(hitboxLeft - platRight) < PLAYER_WIDTH) {
+                        player.x = platRight - PLAYER_WIDTH - 10; // Move onto platform surface
+                    }
+                    break;
+                }
+            }
         }
-        
+
         // Skip normal physics while climbing
         return;
     }

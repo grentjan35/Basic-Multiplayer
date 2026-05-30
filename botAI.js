@@ -634,7 +634,26 @@ class BotAI {
             this.targetPlayerId = null;
         }
 
-        // --- Climbing check - higher priority than following player ---
+        // --- Climbing check - only climb if it's beneficial, not when attacking ---
+        // Check if bot is near a platform side and should jump to climb
+        if (!botPlayer.isClimbing && !botPlayer.isDead) {
+            // Don't climb if there's an attackable target nearby
+            const canAttackNow = target && this.canAttackTarget(botPlayer, target, platforms);
+            if (!canAttackNow) {
+                const climbResult = this.checkNearPlatformSide(botPlayer, platforms);
+                if (climbResult) {
+                    // Only climb if target is above or if no target (patrol mode)
+                    const shouldClimb = !target || (target.y < botPlayer.y - 50);
+                    if (shouldClimb) {
+                        // Set jump input when near platform side - server physics will handle climbing
+                        botPlayer.inputs.jump = true;
+                        this.debugInfo += 'CLIMB ';
+                        return;
+                    }
+                }
+            }
+        }
+
         // Use A* pathfinding to navigate through multiple platforms
         if (target) {
             const targetPlatIdx = findPlatformAt(target.x, target.y, platforms);
@@ -650,6 +669,7 @@ class BotAI {
                     if (path && path.length > 1) {
                         // Get next platform in path (skip current)
                         const nextPlatform = path[1];
+                        // Aim for the SIDE of the platform to trigger climbing
                         const climbTargetX = moveDir > 0 ? nextPlatform.x - PLAYER_WIDTH : nextPlatform.x + nextPlatform.w;
                         
                         botPlayer.inputs.right = moveDir > 0;
@@ -659,11 +679,24 @@ class BotAI {
                         return;
                     } else if (path && path.length === 1) {
                         // Already on target platform
+                        // Aim for the SIDE of the platform to trigger climbing
                         const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
                         botPlayer.inputs.right = moveDir > 0;
                         botPlayer.inputs.left = moveDir < 0;
                         botPlayer.inputs.jump = true;
                         this.debugInfo += 'CLIMB_TARGET ';
+                        return;
+                    } else {
+                        // No path found, but target is above - aim for platform side directly
+                        const climbTargetX = moveDir > 0 ? targetPlat.x - PLAYER_WIDTH : targetPlat.x + targetPlat.w;
+                        // Move toward the side of the platform
+                        this.moveToward(botPlayer, climbTargetX, platforms);
+                        // Jump when close to the platform side
+                        const distToSide = Math.abs(botPlayer.x - climbTargetX);
+                        if (distToSide < 50) {
+                            botPlayer.inputs.jump = true;
+                            this.debugInfo += 'AIM_SIDE ';
+                        }
                         return;
                     }
                 }
@@ -1237,8 +1270,10 @@ class BotAI {
             const b = platforms[targetPlat];
 
             if (b.y < a.y) {
-                // Target platform is above - need to jump with momentum
-                this.moveTowardWithJump(botPlayer, waypoint.x, waypoint.y, platforms, currentTick, true);
+                // Target platform is above - aim for the SIDE to trigger climbing
+                const moveDir = waypoint.x > botPlayer.x ? 1 : -1;
+                const climbTargetX = moveDir > 0 ? b.x - PLAYER_WIDTH : b.x + b.w;
+                this.moveTowardWithJump(botPlayer, climbTargetX, waypoint.y, platforms, currentTick, true);
             } else if (b.y > a.y) {
                 // Target platform is below - need to drop or walk off edge
                 if (this.isAbovePlatform(botPlayer.x, botPlayer.y, b)) {
@@ -1375,6 +1410,46 @@ class BotAI {
         const targetX = dx > 0 ? tx + sideOffset : tx - sideOffset;
 
         return { x: targetX, y: ty };
+    }
+
+    // Check if bot is near a platform side and should jump to climb
+    checkNearPlatformSide(botPlayer, platforms) {
+        const hitboxLeft = botPlayer.x + HITBOX_LEFT_INSET;
+        const hitboxRight = hitboxLeft + HITBOX_WIDTH;
+        const hitboxBottom = botPlayer.y + PLAYER_HEIGHT;
+
+        for (const plat of platforms) {
+            const platLeft = plat.x;
+            const platRight = plat.x + plat.w;
+            const platTop = plat.y;
+
+            // Check if platform is above bot and reachable
+            if (platTop >= botPlayer.y) continue; // Platform not above
+            const heightDiff = botPlayer.y - platTop;
+            if (heightDiff > MAX_SINGLE_JUMP_HEIGHT) continue; // Too high
+
+            // Check if bot is horizontally aligned with platform
+            const horizontalOverlap = Math.max(0, Math.min(hitboxRight, platRight) - Math.max(hitboxLeft, platLeft));
+            
+            // Check if bot is close to the LEFT side of platform
+            const distToLeft = Math.abs(hitboxRight - platLeft);
+            if (distToLeft < 30 && horizontalOverlap < 20) {
+                // Bot is near left side, facing right would hit it
+                if (botPlayer.facingRight) {
+                    return true;
+                }
+            }
+
+            // Check if bot is close to the RIGHT side of platform
+            const distToRight = Math.abs(hitboxLeft - platRight);
+            if (distToRight < 30 && horizontalOverlap < 20) {
+                // Bot is near right side, facing left would hit it
+                if (!botPlayer.facingRight) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // Stub for the old A* platform climber (methods were removed).
