@@ -419,6 +419,89 @@
             cursor: not-allowed;
         }
 
+        /* Mobile Controls */
+        #mobileControls {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        #joystickContainer {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 120px;
+            height: 120px;
+            pointer-events: auto;
+        }
+
+        #joystickBase {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            background-color: rgba(42, 42, 42, 0.8);
+            border: 2px solid #3a3a3a;
+            border-radius: 50%;
+        }
+
+        #joystickThumb {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            background-color: rgba(183, 224, 87, 0.6);
+            border: 2px solid #b7e057;
+            border-radius: 50%;
+            top: 35px;
+            left: 35px;
+            transition: none;
+        }
+
+        #actionButtons {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            pointer-events: auto;
+        }
+
+        .mobileButton {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 2px solid #3a3a3a;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        #attackButton {
+            background-color: rgba(231, 76, 60, 0.7);
+            color: white;
+        }
+
+        #attackButton:active {
+            background-color: rgba(231, 76, 60, 0.9);
+        }
+
+        #jumpButton {
+            background-color: rgba(52, 152, 219, 0.7);
+            color: white;
+        }
+
+        #jumpButton:active {
+            background-color: rgba(52, 152, 219, 0.9);
+        }
+
     </style>
 </head>
 <body>
@@ -445,6 +528,17 @@
             </div>
         </div>
         <canvas id="minimap"></canvas>
+        <div id="mobileControls">
+            <div id="joystickContainer">
+                <div id="joystickBase">
+                    <div id="joystickThumb"></div>
+                </div>
+            </div>
+            <div id="actionButtons">
+                <button id="attackButton" class="mobileButton">ATTACK</button>
+                <button id="jumpButton" class="mobileButton">JUMP</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1654,6 +1748,126 @@ let showBotPaths = false;
             }
             sendInput();
         });
+
+        // Mobile detection and controls
+        function isMobileDevice() {
+            const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+            return /android|ipad|iphone|ipod/i.test(userAgent) || 'ontouchstart' in window;
+        }
+
+        // Show mobile controls if on mobile device
+        if (isMobileDevice()) {
+            document.getElementById('mobileControls').style.display = 'block';
+        }
+
+        // Virtual joystick implementation
+        const joystickContainer = document.getElementById('joystickContainer');
+        const joystickThumb = document.getElementById('joystickThumb');
+        const joystickBase = document.getElementById('joystickBase');
+        let joystickActive = false;
+        let joystickCenterX = 0;
+        let joystickCenterY = 0;
+        const joystickRadius = 35; // Maximum distance thumb can move from center
+
+        function handleJoystickStart(e) {
+            e.preventDefault();
+            joystickActive = true;
+            const rect = joystickBase.getBoundingClientRect();
+            joystickCenterX = rect.left + rect.width / 2;
+            joystickCenterY = rect.top + rect.height / 2;
+            handleJoystickMove(e);
+        }
+
+        function handleJoystickMove(e) {
+            if (!joystickActive) return;
+            e.preventDefault();
+
+            const touch = e.touches ? e.touches[0] : e;
+            const dx = touch.clientX - joystickCenterX;
+            const dy = touch.clientY - joystickCenterY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+
+            // Clamp distance to joystick radius
+            const clampedDistance = Math.min(distance, joystickRadius);
+            const thumbX = Math.cos(angle) * clampedDistance;
+            const thumbY = Math.sin(angle) * clampedDistance;
+
+            // Update thumb position
+            joystickThumb.style.transform = `translate(${thumbX}px, ${thumbY}px)`;
+
+            // Update input based on horizontal position
+            const threshold = 10; // Minimum movement to register input
+            if (thumbX > threshold) {
+                inputs.right = true;
+                inputs.left = false;
+            } else if (thumbX < -threshold) {
+                inputs.left = true;
+                inputs.right = false;
+            } else {
+                inputs.left = false;
+                inputs.right = false;
+            }
+
+            sendInput();
+        }
+
+        function handleJoystickEnd(e) {
+            e.preventDefault();
+            joystickActive = false;
+            joystickThumb.style.transform = 'translate(0px, 0px)';
+            inputs.left = false;
+            inputs.right = false;
+            sendInput();
+        }
+
+        // Joystick event listeners
+        joystickContainer.addEventListener('touchstart', handleJoystickStart, { passive: false });
+        joystickContainer.addEventListener('touchmove', handleJoystickMove, { passive: false });
+        joystickContainer.addEventListener('touchend', handleJoystickEnd, { passive: false });
+        joystickContainer.addEventListener('touchcancel', handleJoystickEnd, { passive: false });
+
+        // Mobile button controls
+        const attackButton = document.getElementById('attackButton');
+        const jumpButton = document.getElementById('jumpButton');
+
+        function handleAttackStart(e) {
+            e.preventDefault();
+            if (!attackInputSent) {
+                inputs.attack = true;
+                attackInputSent = true;
+                sendInput();
+            }
+        }
+
+        function handleAttackEnd(e) {
+            e.preventDefault();
+            inputs.attack = false;
+            attackInputSent = false;
+            sendInput();
+        }
+
+        function handleJumpStart(e) {
+            e.preventDefault();
+            inputs.jump = true;
+            sendInput();
+        }
+
+        function handleJumpEnd(e) {
+            e.preventDefault();
+            inputs.jump = false;
+            sendInput();
+        }
+
+        // Attack button event listeners
+        attackButton.addEventListener('touchstart', handleAttackStart, { passive: false });
+        attackButton.addEventListener('touchend', handleAttackEnd, { passive: false });
+        attackButton.addEventListener('touchcancel', handleAttackEnd, { passive: false });
+
+        // Jump button event listeners
+        jumpButton.addEventListener('touchstart', handleJumpStart, { passive: false });
+        jumpButton.addEventListener('touchend', handleJumpEnd, { passive: false });
+        jumpButton.addEventListener('touchcancel', handleJumpEnd, { passive: false });
 
         // Performance monitoring
         let lastFrameTime = performance.now();
