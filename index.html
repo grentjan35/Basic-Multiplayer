@@ -55,6 +55,164 @@
             z-index: 10;
         }
 
+        #killFeed {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            width: 300px;
+            max-height: 200px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            z-index: 10;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            pointer-events: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        #killFeed::-webkit-scrollbar {
+            display: none;
+        }
+
+        #killFeed {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .killFeedEntry {
+            padding: 4px 8px;
+            margin-bottom: 0;
+            background-color: rgba(20, 20, 20, 0.95);
+            border-left: 2px solid #3a3a3a;
+            border-bottom: 1px solid rgba(58, 58, 58, 0.5);
+            animation: fadeIn 0.3s ease-out;
+            pointer-events: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            will-change: transform, opacity;
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+        }
+
+        .killFeedEntry:last-child {
+            border-bottom: none;
+        }
+
+        .killFeedEntry.shake-low {
+            animation: fadeInShakeLow 0.4s ease-out;
+        }
+
+        .killFeedEntry.shake-medium {
+            animation: fadeInShakeMedium 0.5s ease-out;
+        }
+
+        .killFeedEntry.shake-high {
+            animation: fadeInShakeHigh 0.6s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateX(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeInShakeLow {
+            0% {
+                opacity: 0;
+                transform: translateX(-10px) rotate(-2deg);
+            }
+            25% {
+                transform: translateX(2px) rotate(1deg);
+            }
+            50% {
+                transform: translateX(-1px) rotate(-0.5deg);
+            }
+            75% {
+                transform: translateX(0.5px) rotate(0.25deg);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0) rotate(0deg);
+            }
+        }
+
+        @keyframes fadeInShakeMedium {
+            0% {
+                opacity: 0;
+                transform: translateX(-15px) rotate(-5deg) scale(1.05);
+            }
+            20% {
+                transform: translateX(5px) rotate(3deg) scale(1.02);
+            }
+            40% {
+                transform: translateX(-3px) rotate(-2deg) scale(1.01);
+            }
+            60% {
+                transform: translateX(2px) rotate(1deg) scale(1.005);
+            }
+            80% {
+                transform: translateX(-1px) rotate(-0.5deg) scale(1.002);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0) rotate(0deg) scale(1);
+            }
+        }
+
+        @keyframes fadeInShakeHigh {
+            0% {
+                opacity: 0;
+                transform: translateX(-25px) rotate(-10deg) scale(1.15);
+            }
+            15% {
+                transform: translateX(10px) rotate(6deg) scale(1.08);
+            }
+            30% {
+                transform: translateX(-8px) rotate(-5deg) scale(1.05);
+            }
+            45% {
+                transform: translateX(5px) rotate(3deg) scale(1.03);
+            }
+            60% {
+                transform: translateX(-3px) rotate(-2deg) scale(1.02);
+            }
+            75% {
+                transform: translateX(2px) rotate(1deg) scale(1.01);
+            }
+            90% {
+                transform: translateX(-1px) rotate(-0.5deg) scale(1.005);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0) rotate(0deg) scale(1);
+            }
+        }
+
+        .killFeedEntry .killer {
+            color: #b7e057;
+            font-weight: bold;
+        }
+
+        .killFeedEntry .action {
+            color: #888;
+            margin: 0 4px;
+        }
+
+        .killFeedEntry .victim {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+
         #minimap {
             position: absolute;
             top: 10px;
@@ -275,6 +433,7 @@
         <canvas id="canvas"></canvas>
         <div id="playerCount">Players: 0</div>
         <div id="fpsCounter">FPS: 0</div>
+        <div id="killFeed"></div>
         <div id="spectatorPanel">
             <div id="spectatorHeader">
                 <span>&gt; SPECTATOR</span>
@@ -296,6 +455,55 @@
         const fpsCounter = document.getElementById('fpsCounter');
         const minimapCanvas = document.getElementById('minimap');
         const minimapCtx = minimapCanvas.getContext('2d');
+        const killFeed = document.getElementById('killFeed');
+        
+        // Kill feed system
+        const MAX_KILL_FEED_ENTRIES = 10;
+        const KILL_FEED_ENTRY_LIFETIME = 5000; // 5 seconds
+        
+        function addKillFeedEntry(killerName, victimName, action, intensity = 'low') {
+            const entry = document.createElement('div');
+            entry.className = 'killFeedEntry';
+            
+            // Add shake animation class based on intensity
+            if (intensity === 'high') {
+                entry.classList.add('shake-high');
+            } else if (intensity === 'medium') {
+                entry.classList.add('shake-medium');
+            } else if (intensity === 'low') {
+                entry.classList.add('shake-low');
+            }
+            
+            const killerSpan = document.createElement('span');
+            killerSpan.className = 'killer';
+            killerSpan.textContent = killerName;
+            
+            const actionSpan = document.createElement('span');
+            actionSpan.className = 'action';
+            actionSpan.textContent = ` ${action} `;
+            
+            const victimSpan = document.createElement('span');
+            victimSpan.className = 'victim';
+            victimSpan.textContent = victimName;
+            
+            entry.appendChild(killerSpan);
+            entry.appendChild(actionSpan);
+            entry.appendChild(victimSpan);
+            
+            killFeed.appendChild(entry);
+            
+            // Remove oldest entries if we exceed max
+            while (killFeed.children.length > MAX_KILL_FEED_ENTRIES) {
+                killFeed.removeChild(killFeed.firstChild);
+            }
+            
+            // Auto-remove entry after lifetime
+            setTimeout(() => {
+                if (entry.parentNode === killFeed) {
+                    killFeed.removeChild(entry);
+                }
+            }, KILL_FEED_ENTRY_LIFETIME);
+        }
         
         let ws = null;
         let myPlayerId = null;
@@ -1255,6 +1463,13 @@ let showBotPaths = false;
                     }
                     
                     playerCount.textContent = `Players: ${data.players.length}`;
+                    
+                    // ---- Handle kill feed events ----
+                    if (Array.isArray(data.killFeedEvents)) {
+                        for (const ev of data.killFeedEvents) {
+                            addKillFeedEntry(ev.killerName, ev.victimName, ev.action, ev.intensity);
+                        }
+                    }
                     
                     // ---- Store bot paths from server (for Shift+D debug) ----
                     if (data.botPaths) {

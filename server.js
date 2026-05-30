@@ -65,6 +65,9 @@ function generateRandomBotName() {
 // Per-tick audio events queue (cleared each frame in gameLoop)
 const audioEvents = [];
 
+// Kill feed events queue (cleared each frame in gameLoop)
+const killFeedEvents = [];
+
 // Game state - SERVER ONLY
 const players = new Map();
 let platforms = [];
@@ -1136,6 +1139,9 @@ function gameLoop() {
     // Per-tick audio events queue (cleared each frame)
     audioEvents.length = 0;
     
+    // Per-tick kill feed events queue (cleared each frame)
+    killFeedEvents.length = 0;
+    
     // --- PHASE 1: Collect all active attacks ---
     // Gather attack data before any collision processing
     const activeAttacks = [];
@@ -1186,6 +1192,29 @@ function gameLoop() {
                 if (defender.health <= 0) {
                     defender.isDead = true;
                     defender.deathTimer = 60; // ~2 seconds at 30 TPS
+                    
+                    // Queue kill feed event
+                    const stage = hitbox.stage;
+                    let action = 'eliminated';
+                    let intensity = 'low';
+                    
+                    if (stage === 4) {
+                        action = 'K.O.d';
+                        intensity = 'high';
+                    } else if (stage === 1 || stage === 3) {
+                        action = 'jabbed';
+                        intensity = 'low';
+                    } else if (stage === 2) {
+                        action = 'crossed';
+                        intensity = 'medium';
+                    }
+                    
+                    killFeedEvents.push({
+                        killerName: attacker.name,
+                        victimName: defender.name,
+                        action: action,
+                        intensity: intensity
+                    });
                 }
                 
                 // This attack can only hit one player, stop checking
@@ -1254,7 +1283,8 @@ function gameLoop() {
             frame: gameTickCounter,
             snapshotTime,                     // server-side wall-clock at send instant
             players: playerStates,
-            audioEvents: audioEvents
+            audioEvents: audioEvents,
+            killFeedEvents: killFeedEvents
         };
         
         // Include bot path data for debug visualization
