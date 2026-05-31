@@ -675,6 +675,15 @@
         let spectatorCamera = { x: 0, y: 0 }; // World-space free-camera position when no target is set
         let spectatorCameraZoom = SPECTATOR_CAMERA_ZOOM; // Current zoom in spectator
         let lastSpectatorEntriesHash = ''; // Track if entries changed to avoid rebuilding every frame
+        
+        // Spectator camera movement state for smooth movement
+        const spectatorInputs = {
+            up: false,
+            down: false,
+            left: false,
+            right: false
+        };
+        const SPECTATOR_MOVE_SPEED = 20; // Pixels per frame for smooth movement
 
         // Plus-key combo detection
         let plusPressCount = 0;
@@ -1660,10 +1669,10 @@ let showBotPaths = false;
             if (spectatorActive) {
                 // ── Spectator free-camera: WASD + QE ─────────────
                 // Letter keys W/A/S/D → WASD
-                if (e.code === 'KeyW' || e.code === 'ArrowUp')    { e.preventDefault(); spectatorCamera.y -= 12; }
-                if (e.code === 'KeyS' || e.code === 'ArrowDown')  { e.preventDefault(); spectatorCamera.y += 12; }
-                if (e.code === 'KeyA' || e.code === 'ArrowLeft')  { e.preventDefault(); spectatorCamera.x -= 12; }
-                if (e.code === 'KeyD' || e.code === 'ArrowRight') { e.preventDefault(); spectatorCamera.x += 12; }
+                if (e.code === 'KeyW' || e.code === 'ArrowUp')    { e.preventDefault(); spectatorInputs.up = true; }
+                if (e.code === 'KeyS' || e.code === 'ArrowDown')  { e.preventDefault(); spectatorInputs.down = true; }
+                if (e.code === 'KeyA' || e.code === 'ArrowLeft')  { e.preventDefault(); spectatorInputs.left = true; }
+                if (e.code === 'KeyD' || e.code === 'ArrowRight') { e.preventDefault(); spectatorInputs.right = true; }
                 if (e.code === 'KeyQ') { e.preventDefault(); spectatorCameraZoom = Math.max(0.25, spectatorCameraZoom - 0.05); }
                 if (e.code === 'KeyE') { e.preventDefault(); spectatorCameraZoom = Math.min(4.0, spectatorCameraZoom + 0.05); }
                 return;
@@ -1717,7 +1726,14 @@ let showBotPaths = false;
         });
 
         document.addEventListener('keyup', (e) => {
-            if (spectatorActive) return; // no game inputs in spectator mode
+            if (spectatorActive) {
+                // Clear spectator input states
+                if (e.code === 'KeyW' || e.code === 'ArrowUp')    { spectatorInputs.up = false; }
+                if (e.code === 'KeyS' || e.code === 'ArrowDown')  { spectatorInputs.down = false; }
+                if (e.code === 'KeyA' || e.code === 'ArrowLeft')  { spectatorInputs.left = false; }
+                if (e.code === 'KeyD' || e.code === 'ArrowRight') { spectatorInputs.right = false; }
+                return;
+            }
 
             switch(e.code) {
                 case 'ArrowLeft':
@@ -2088,7 +2104,10 @@ let showBotPaths = false;
 
             // ── Camera: normal (follow local player) or spectator (free / tracked) ──
             let cameraCX, cameraCY;
-            const CAMERA_ZOOM = spectatorActive ? spectatorCameraZoom : 1.3;
+            // Use lower zoom on mobile to show more of the game world
+            const MOBILE_ZOOM = 0.8;
+            const DESKTOP_ZOOM = 1.3;
+            const CAMERA_ZOOM = spectatorActive ? spectatorCameraZoom : (isMobileDevice() ? MOBILE_ZOOM : DESKTOP_ZOOM);
 
             if (spectatorActive && spectatorTargetId !== null) {
                 // ── Spectator: camera locked to targeted entity ─────────────────
@@ -2103,6 +2122,12 @@ let showBotPaths = false;
                 }
             } else if (spectatorActive) {
                 // ── Spectator: free-camera (WASD moves spectatorCamera) ─────────
+                // Smooth camera movement based on input states
+                if (spectatorInputs.up)    spectatorCamera.y -= SPECTATOR_MOVE_SPEED;
+                if (spectatorInputs.down)  spectatorCamera.y += SPECTATOR_MOVE_SPEED;
+                if (spectatorInputs.left)  spectatorCamera.x -= SPECTATOR_MOVE_SPEED;
+                if (spectatorInputs.right) spectatorCamera.x += SPECTATOR_MOVE_SPEED;
+                
                 cameraCX = spectatorCamera.x;
                 cameraCY = spectatorCamera.y;
             } else {
